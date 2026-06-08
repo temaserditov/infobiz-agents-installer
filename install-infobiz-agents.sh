@@ -134,6 +134,115 @@ run_hermes() {
     "$HERMES_CMD" "$@"
 }
 
+run_hermes_auth() {
+  HERMES_HOME="$HERMES_ROOT" \
+    INSTALL_NAME_TOOL="$SHIM_DIR/install_name_tool" \
+    PATH="$SHIM_DIR:$HERMES_ROOT/node/bin:$HERMES_AGENT_ROOT/venv/bin:$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+    "$HERMES_AGENT_ROOT/venv/bin/python" - "$HERMES_CMD" auth add openai-codex <<'PY'
+import os
+import pty
+import re
+import select
+import subprocess
+import sys
+
+argv = sys.argv[1:]
+url_re = re.compile(r"https?://[^\s)>\]\"']+")
+code_re = re.compile(r"\b[A-Z0-9]{4,}(?:-[A-Z0-9]{4,})+\b")
+opened_urls = set()
+copied_codes = set()
+buffer = ""
+
+
+def notify(message):
+    os.write(sys.stdout.fileno(), f"\n   {message}\n".encode())
+
+
+def open_url(url):
+    if url in opened_urls:
+        return
+    opened_urls.add(url)
+    try:
+        subprocess.Popen(
+            ["/usr/bin/open", url],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        notify("Opened authorization page in your browser.")
+    except OSError:
+        pass
+
+
+def copy_code(code, context):
+    if code in copied_codes:
+        return
+    if "code" not in context.lower():
+        return
+    copied_codes.add(code)
+    try:
+        subprocess.run(
+            ["/usr/bin/pbcopy"],
+            input=code,
+            text=True,
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        notify(f"Copied authorization code to clipboard: {code}")
+    except OSError:
+        pass
+
+
+def inspect_output(text):
+    global buffer
+    buffer = (buffer + text)[-4000:]
+    for match in url_re.findall(text):
+        open_url(match.rstrip(".,;:"))
+    for match in code_re.findall(buffer):
+        start = max(0, buffer.find(match) - 160)
+        end = min(len(buffer), buffer.find(match) + len(match) + 160)
+        copy_code(match, buffer[start:end])
+
+
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(argv[0], argv)
+
+exit_status = 1
+child_done = False
+try:
+    while True:
+        readable, _, _ = select.select([fd], [], [], 0.2)
+        if fd in readable:
+            try:
+                data = os.read(fd, 4096)
+            except OSError:
+                break
+            if not data:
+                break
+            os.write(sys.stdout.fileno(), data)
+            inspect_output(data.decode(errors="ignore"))
+        finished_pid, status = os.waitpid(pid, os.WNOHANG)
+        if finished_pid:
+            exit_status = os.waitstatus_to_exitcode(status)
+            child_done = True
+            break
+finally:
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    if not child_done:
+        try:
+            _, status = os.waitpid(pid, 0)
+            exit_status = os.waitstatus_to_exitcode(status)
+        except ChildProcessError:
+            pass
+
+sys.exit(exit_status)
+PY
+}
+
 ensure_uv() {
   if command -v uv >/dev/null 2>&1; then
     UV_CMD="$(command -v uv)"
@@ -346,8 +455,8 @@ if [[ -f "$HERMES_ROOT/.env" ]]; then
 fi
 
 say "OpenAI/Hermes authorization"
-printf "Follow the Hermes authorization instructions below. After auth finishes, installer will continue.\n"
-run_hermes auth add openai-codex || fail "OpenAI/Hermes authorization failed"
+printf "The installer will open the authorization page and copy the code when Hermes prints it.\n"
+run_hermes_auth || fail "OpenAI/Hermes authorization failed"
 
 say "Installing Hermes gateway service for profile: $AGENT_PROFILE"
 run_hermes -p "$AGENT_PROFILE" gateway install --force >> "$LOG_FILE" 2>&1 || true
