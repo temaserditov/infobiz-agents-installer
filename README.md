@@ -1,22 +1,46 @@
-# Infobiz Agents Installer
+# Infobiz Agents terminal installer
 
-Install the marketer Hermes agent on macOS:
+Preferred student install path for macOS.
+
+The installer uses the official Hermes repository and installer:
+
+- Hermes source: `https://github.com/NousResearch/hermes-agent`
+- Runtime/dependencies: installed by Hermes `scripts/install.sh --skip-setup`
+- Student-facing output: quiet Infobiz steps only
+- Full technical output: `~/InfobizAgents/install.log`
+
+Our release payload contains only the `marketer` profile. It excludes auth,
+tokens, logs, sessions, state databases, and runtime files.
+
+## Build profile payload
 
 ```bash
-BASE_URL="https://github.com/temaserditov/infobiz-agents-installer/releases/download/v0.1.0" /bin/zsh -c "$(curl -fsSL https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/install-infobiz-agents.sh)"
+./terminal-installer/build-profile-payload.sh
 ```
 
-The installer bundles Hermes, Python, and Node.js inside the release payload.
-It does not ask students whether to install missing dependencies.
+The archive is written to:
 
-Uninstall all test installer artifacts:
+```text
+terminal-installer/dist/infobiz-agent-profile-marketer-0.1.0.tar.gz
+```
+
+## Local test
 
 ```bash
-/bin/zsh -c "$(curl -fsSL https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/uninstall-infobiz-agents.sh)"
+PROFILE_TARBALL="/path/to/infobiz-agent-profile-marketer-0.1.0.tar.gz" \
+  ./terminal-installer/install-infobiz-agents.sh
 ```
 
-Current payloads:
+## Hosted install command
 
-- `infobiz-agents-marketer-macos-arm64-0.1.0.tar.gz`
+Upload:
 
-Intel Mac support requires a separate `x86_64` payload.
+- `install-infobiz-agents.sh`
+- `infobiz-agent-profile-marketer-0.1.0.tar.gz`
+
+Then publish:
+
+```bash
+BASE_URL="https://github.com/USER/REPO/releases/download/v0.1.0" \
+  /bin/zsh -c "$(curl -fsSL https://raw.githubusercontent.com/USER/REPO/main/install-infobiz-agents.sh)"
+```
