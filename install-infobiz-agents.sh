@@ -138,7 +138,7 @@ need_payload() {
     fail "PAYLOAD_URL or BASE_URL is not set."
   fi
   local downloaded="$TMPDIR/infobiz-agents-payload.tar.gz"
-  if ! curl -fL "$PAYLOAD_URL" -o "$downloaded"; then
+  if ! curl -fsSL "$PAYLOAD_URL" -o "$downloaded"; then
     if [[ "$ARCH" == "x86_64" ]]; then
       fail "Intel Mac detected, but Intel payload is not available at: $PAYLOAD_URL"
     fi
@@ -156,8 +156,8 @@ perl_escape_replacement() {
 }
 
 read_token() {
-  printf "\nTelegram Bot Token можно оставить пустым и добавить позже.\n"
-  printf "Telegram Bot Token: "
+  printf "\nTelegram Bot Token можно оставить пустым и добавить позже.\n" >&2
+  printf "Telegram Bot Token: " >&2
   read -r token
   printf "%s" "$token"
 }
