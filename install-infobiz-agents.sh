@@ -89,7 +89,8 @@ shell_quote() {
 download_file() {
   local url="$1"
   local output="$2"
-  printf "   Downloading: %s\n" "$url"
+  printf "   Downloading: %s\n" "$url" >&2
+  printf "Downloading: %s\n" "$url" >> "$LOG_FILE"
   curl -fL --progress-bar "$url" -o "$output" 2> >(/usr/bin/tee -a "$LOG_FILE" >&2)
 }
 
