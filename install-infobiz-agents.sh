@@ -39,9 +39,9 @@ wait_with_timer() {
     elapsed=$((elapsed + 1))
   done
   wait "$pid"
-  local status=$?
+  local exit_code=$?
   printf "\r   %s... done in %ss\n" "$label" "$elapsed"
-  return "$status"
+  return "$exit_code"
 }
 
 format_seconds() {
@@ -60,7 +60,7 @@ extract_payload() {
   local destination="$2"
   local total_file="$destination/.infobiz-extract-total"
   local count_file="$destination/.infobiz-extract-count"
-  local total count elapsed eta percent start now status
+  local total count elapsed eta percent start now exit_code
 
   printf "Preparing progress estimate...\n"
   (tar -tzf "$archive" | /usr/bin/wc -l | /usr/bin/tr -d ' ' > "$total_file") &
@@ -113,17 +113,17 @@ extract_payload() {
   done
 
   wait "$extract_pid"
-  status=$?
+  exit_code=$?
   count="$(cat "$count_file" 2>/dev/null || printf "$total")"
   now="$(/bin/date +%s)"
   elapsed=$((now - start))
-  if (( status == 0 )); then
+  if (( exit_code == 0 )); then
     printf "\r   Extracting: %s/%s (100%%), done in %s               \n" \
       "$count" "$total" "$(format_seconds "$elapsed")"
   else
     printf "\n"
   fi
-  return "$status"
+  return "$exit_code"
 }
 
 need_payload() {
