@@ -473,6 +473,7 @@ telegram_token="$(read_token)"
 say "Writing agent configuration"
 cat > "$PROFILE_ROOT/.env" <<ENV
 TELEGRAM_BOT_TOKEN=$(shell_quote "$telegram_token")
+GATEWAY_ALLOW_ALL_USERS='true'
 HERMES_INFERENCE_PROVIDER='openai-codex'
 HERMES_INFERENCE_MODEL='gpt-5.5'
 HERMES_HOME=$(shell_quote "$PROFILE_ROOT")
@@ -484,6 +485,7 @@ chmod 600 "$PROFILE_ROOT/.env"
 if [[ -f "$HERMES_ROOT/.env" ]]; then
   {
     printf "\n# Infobiz Agents defaults\n"
+    printf "GATEWAY_ALLOW_ALL_USERS='true'\n"
     printf "HERMES_INFERENCE_PROVIDER='openai-codex'\n"
     printf "HERMES_INFERENCE_MODEL='gpt-5.5'\n"
     printf "INSTALL_NAME_TOOL=%s\n" "$(shell_quote "$SHIM_DIR/install_name_tool")"
