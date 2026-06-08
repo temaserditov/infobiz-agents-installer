@@ -3,6 +3,15 @@ set -euo pipefail
 setopt NULL_GLOB
 
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin:$HOME/.local/bin:$HOME/.cargo/bin"
+case "${LANG:-}" in
+  ""|C.UTF-8) export LANG="en_US.UTF-8" ;;
+esac
+case "${LC_ALL:-}" in
+  ""|C.UTF-8) export LC_ALL="en_US.UTF-8" ;;
+esac
+case "${LC_CTYPE:-}" in
+  ""|C.UTF-8) export LC_CTYPE="en_US.UTF-8" ;;
+esac
 
 AGENT_PROFILE="${AGENT_PROFILE:-marketer}"
 AGENT_NAME="${AGENT_NAME:-Маркетолог}"
@@ -31,7 +40,6 @@ LOG_FILE="$INSTALL_ROOT/install.log"
 HERMES_CMD="$HERMES_AGENT_ROOT/venv/bin/hermes"
 UV_CMD=""
 SHIM_DIR="$INSTALL_ROOT/shims"
-COMMAND_LINE_TOOLS_SUPPRESSOR_PID=""
 CLEANUP_WORKDIR=""
 
 say() {
@@ -44,32 +52,10 @@ fail() {
   exit 1
 }
 
-dismiss_command_line_tools_prompt() {
-  /usr/bin/pkill -f "Install Command Line Developer Tools" >/dev/null 2>&1 || true
-}
-
-start_command_line_tools_prompt_suppressor() {
-  (
-    while true; do
-      dismiss_command_line_tools_prompt
-      sleep 1
-    done
-  ) >/dev/null 2>&1 &
-  COMMAND_LINE_TOOLS_SUPPRESSOR_PID="$!"
-}
-
-stop_command_line_tools_prompt_suppressor() {
-  if [[ -n "$COMMAND_LINE_TOOLS_SUPPRESSOR_PID" ]]; then
-    /bin/kill "$COMMAND_LINE_TOOLS_SUPPRESSOR_PID" >/dev/null 2>&1 || true
-  fi
-  dismiss_command_line_tools_prompt
-}
-
 cleanup() {
   if [[ -n "$CLEANUP_WORKDIR" ]]; then
     /bin/rm -rf "$CLEANUP_WORKDIR"
   fi
-  stop_command_line_tools_prompt_suppressor
 }
 
 format_seconds() {
@@ -127,6 +113,25 @@ download_file() {
   printf "   Downloading: %s\n" "$url" >&2
   printf "Downloading: %s\n" "$url" >> "$LOG_FILE"
   curl -fL --progress-bar "$url" -o "$output" 2> >(/usr/bin/tee -a "$LOG_FILE" >&2)
+}
+
+install_command_shims() {
+  /bin/mkdir -p "$SHIM_DIR"
+  cat > "$SHIM_DIR/install_name_tool" <<'SHIM'
+#!/bin/sh
+# Avoid macOS launching the Command Line Tools installer on clean Macs.
+exit 0
+SHIM
+  /bin/chmod +x "$SHIM_DIR/install_name_tool"
+  export INSTALL_NAME_TOOL="$SHIM_DIR/install_name_tool"
+  export PATH="$SHIM_DIR:$PATH"
+}
+
+run_hermes() {
+  HERMES_HOME="$HERMES_ROOT" \
+    INSTALL_NAME_TOOL="$SHIM_DIR/install_name_tool" \
+    PATH="$SHIM_DIR:$HERMES_ROOT/node/bin:$HERMES_AGENT_ROOT/venv/bin:$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+    "$HERMES_CMD" "$@"
 }
 
 ensure_uv() {
@@ -203,15 +208,6 @@ install_hermes_from_source() {
   run_logged "Installing Python $PYTHON_VERSION" "$UV_CMD" python install "$PYTHON_VERSION" || return 1
   run_logged "Creating Hermes virtual environment" "$UV_CMD" venv "$HERMES_AGENT_ROOT/venv" --python "$PYTHON_VERSION" || return 1
   export VIRTUAL_ENV="$HERMES_AGENT_ROOT/venv"
-  /bin/mkdir -p "$SHIM_DIR"
-  cat > "$SHIM_DIR/install_name_tool" <<'SHIM'
-#!/bin/sh
-# Prevent macOS from launching the Command Line Tools installer on clean Macs.
-exit 0
-SHIM
-  /bin/chmod +x "$SHIM_DIR/install_name_tool"
-  export INSTALL_NAME_TOOL="$SHIM_DIR/install_name_tool"
-  export PATH="$SHIM_DIR:$PATH"
   (
     cd "$HERMES_AGENT_ROOT"
     "$UV_CMD" pip install --only-binary=:all: -e ".[${HERMES_EXTRAS}]"
@@ -272,11 +268,7 @@ need_profile_payload() {
 }
 
 read_token() {
-  printf "\nTelegram Bot Token можно оставить пустым и добавить позже.\n" >&2
-  printf "Telegram Bot Token: " >&2
-  local token
-  read -r token
-  printf "%s" "$token"
+  printf "%s" "${TELEGRAM_BOT_TOKEN:-}"
 }
 
 replace_student_paths() {
@@ -296,7 +288,7 @@ printf "Detected Mac architecture: %s\n" "$ARCH"
 mkdir -p "$INSTALL_ROOT" "$CONFIG_DIR"
 : > "$LOG_FILE"
 printf "Infobiz Agents install log\nStarted: %s\nMac architecture: %s\n" "$(/bin/date)" "$ARCH" >> "$LOG_FILE"
-start_command_line_tools_prompt_suppressor
+install_command_shims
 trap cleanup EXIT
 
 say "Installing Hermes from official repository"
@@ -339,7 +331,8 @@ TELEGRAM_BOT_TOKEN=$(shell_quote "$telegram_token")
 HERMES_INFERENCE_PROVIDER='openai-codex'
 HERMES_INFERENCE_MODEL='gpt-5.5'
 HERMES_HOME=$(shell_quote "$PROFILE_ROOT")
-PATH=$(shell_quote "$HERMES_ROOT/node/bin:$HERMES_AGENT_ROOT/venv/bin:$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin")
+PATH=$(shell_quote "$SHIM_DIR:$HERMES_ROOT/node/bin:$HERMES_AGENT_ROOT/venv/bin:$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin")
+INSTALL_NAME_TOOL=$(shell_quote "$SHIM_DIR/install_name_tool")
 ENV
 chmod 600 "$PROFILE_ROOT/.env"
 
@@ -348,18 +341,19 @@ if [[ -f "$HERMES_ROOT/.env" ]]; then
     printf "\n# Infobiz Agents defaults\n"
     printf "HERMES_INFERENCE_PROVIDER='openai-codex'\n"
     printf "HERMES_INFERENCE_MODEL='gpt-5.5'\n"
+    printf "INSTALL_NAME_TOOL=%s\n" "$(shell_quote "$SHIM_DIR/install_name_tool")"
   } >> "$HERMES_ROOT/.env"
 fi
 
 say "OpenAI/Hermes authorization"
 printf "Follow the Hermes authorization instructions below. After auth finishes, installer will continue.\n"
-HERMES_HOME="$HERMES_ROOT" "$HERMES_CMD" auth add openai-codex || fail "OpenAI/Hermes authorization failed"
+run_hermes auth add openai-codex || fail "OpenAI/Hermes authorization failed"
 
 say "Installing Hermes gateway service for profile: $AGENT_PROFILE"
-HERMES_HOME="$HERMES_ROOT" "$HERMES_CMD" -p "$AGENT_PROFILE" gateway install --force >> "$LOG_FILE" 2>&1 || true
+run_hermes -p "$AGENT_PROFILE" gateway install --force >> "$LOG_FILE" 2>&1 || true
 
 say "Starting Hermes gateway"
-HERMES_HOME="$HERMES_ROOT" "$HERMES_CMD" -p "$AGENT_PROFILE" gateway start >> "$LOG_FILE" 2>&1 || true
+run_hermes -p "$AGENT_PROFILE" gateway start >> "$LOG_FILE" 2>&1 || true
 
 say "Done"
 printf "Installed %s. Send a message to the connected Telegram bot.\n" "$AGENT_NAME"
