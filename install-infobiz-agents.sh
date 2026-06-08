@@ -11,7 +11,10 @@ BASE_URL="${BASE_URL:-}"
 PROFILE_URL="${PROFILE_URL:-}"
 PROFILE_TARBALL="${PROFILE_TARBALL:-}"
 HERMES_BRANCH="${HERMES_BRANCH:-main}"
-HERMES_INSTALL_URL="${HERMES_INSTALL_URL:-https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh}"
+HERMES_SOURCE_URL="${HERMES_SOURCE_URL:-https://github.com/NousResearch/hermes-agent/archive/refs/heads/$HERMES_BRANCH.tar.gz}"
+PYTHON_VERSION="${PYTHON_VERSION:-3.11}"
+HERMES_EXTRAS="${HERMES_EXTRAS:-messaging,cli,pty,mcp}"
+NODE_VERSION="${NODE_VERSION:-22}"
 ARCH="$(/usr/bin/uname -m)"
 
 INSTALL_ROOT="$HOME/InfobizAgents"
@@ -21,6 +24,7 @@ HERMES_AGENT_ROOT="$HERMES_ROOT/hermes-agent"
 PROFILE_ROOT="$HERMES_ROOT/profiles/$AGENT_PROFILE"
 LOG_FILE="$INSTALL_ROOT/install.log"
 HERMES_CMD="$HERMES_AGENT_ROOT/venv/bin/hermes"
+UV_CMD=""
 
 say() {
   printf "\n==> %s\n" "$1"
@@ -85,7 +89,125 @@ download_file() {
   local url="$1"
   local output="$2"
   printf "   Downloading: %s\n" "$url"
-  curl -fL --progress-bar "$url" -o "$output" >> "$LOG_FILE" 2>&1
+  curl -fL --progress-bar "$url" -o "$output" 2> >(/usr/bin/tee -a "$LOG_FILE" >&2)
+}
+
+ensure_uv() {
+  if command -v uv >/dev/null 2>&1; then
+    UV_CMD="$(command -v uv)"
+    return 0
+  fi
+  if [[ -x "$HOME/.local/bin/uv" ]]; then
+    UV_CMD="$HOME/.local/bin/uv"
+    return 0
+  fi
+  if [[ -x "$HOME/.cargo/bin/uv" ]]; then
+    UV_CMD="$HOME/.cargo/bin/uv"
+    return 0
+  fi
+  local uv_installer="$TMPDIR/uv-install.sh"
+  download_file "https://astral.sh/uv/install.sh" "$uv_installer"
+  chmod +x "$uv_installer"
+  run_logged "Installing uv package manager" /bin/sh "$uv_installer" || return 1
+  if [[ -x "$HOME/.local/bin/uv" ]]; then
+    UV_CMD="$HOME/.local/bin/uv"
+  elif [[ -x "$HOME/.cargo/bin/uv" ]]; then
+    UV_CMD="$HOME/.cargo/bin/uv"
+  elif command -v uv >/dev/null 2>&1; then
+    UV_CMD="$(command -v uv)"
+  else
+    return 1
+  fi
+}
+
+install_node_runtime() {
+  if command -v node >/dev/null 2>&1; then
+    return 0
+  fi
+  if [[ -x "$HERMES_ROOT/node/bin/node" ]]; then
+    export PATH="$HERMES_ROOT/node/bin:$PATH"
+    return 0
+  fi
+
+  local node_arch node_os index_url tarball_name download_url tmp_dir extracted_dir
+  case "$ARCH" in
+    x86_64) node_arch="x64" ;;
+    arm64|aarch64) node_arch="arm64" ;;
+    *) return 0 ;;
+  esac
+  node_os="darwin"
+  index_url="https://nodejs.org/dist/latest-v${NODE_VERSION}.x/"
+  tarball_name="$(curl -fsSL "$index_url" | /usr/bin/grep -oE "node-v${NODE_VERSION}\.[0-9]+\.[0-9]+-${node_os}-${node_arch}\.tar\.xz" | /usr/bin/head -1 || true)"
+  [[ -n "$tarball_name" ]] || return 0
+  download_url="${index_url}${tarball_name}"
+  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/infobiz-node.XXXXXX")"
+  download_file "$download_url" "$tmp_dir/$tarball_name"
+  run_logged "Installing Node.js runtime" /usr/bin/tar -xf "$tmp_dir/$tarball_name" -C "$tmp_dir" || return 1
+  extracted_dir="$(/bin/ls -d "$tmp_dir"/node-v* 2>/dev/null | /usr/bin/head -1)"
+  [[ -d "$extracted_dir" ]] || return 1
+  /bin/rm -rf "$HERMES_ROOT/node"
+  /bin/mkdir -p "$HERMES_ROOT"
+  /bin/mv "$extracted_dir" "$HERMES_ROOT/node"
+  /bin/rm -rf "$tmp_dir"
+  /bin/mkdir -p "$HOME/.local/bin"
+  /bin/ln -sf "$HERMES_ROOT/node/bin/node" "$HOME/.local/bin/node"
+  /bin/ln -sf "$HERMES_ROOT/node/bin/npm" "$HOME/.local/bin/npm"
+  /bin/ln -sf "$HERMES_ROOT/node/bin/npx" "$HOME/.local/bin/npx"
+  export PATH="$HERMES_ROOT/node/bin:$PATH"
+}
+
+install_hermes_from_source() {
+  local source_tarball="$TMPDIR/hermes-agent-source.tar.gz"
+  local python_path
+  download_file "$HERMES_SOURCE_URL" "$source_tarball"
+  /bin/rm -rf "$HERMES_AGENT_ROOT"
+  /bin/mkdir -p "$HERMES_AGENT_ROOT"
+  run_logged "Extracting Hermes source" /usr/bin/tar --strip-components=1 -xzf "$source_tarball" -C "$HERMES_AGENT_ROOT" || return 1
+  run_logged "Installing Python $PYTHON_VERSION" "$UV_CMD" python install "$PYTHON_VERSION" || return 1
+  run_logged "Creating Hermes virtual environment" "$UV_CMD" venv "$HERMES_AGENT_ROOT/venv" --python "$PYTHON_VERSION" || return 1
+  export VIRTUAL_ENV="$HERMES_AGENT_ROOT/venv"
+  (
+    cd "$HERMES_AGENT_ROOT"
+    "$UV_CMD" pip install -e ".[${HERMES_EXTRAS}]"
+  ) >> "$LOG_FILE" 2>&1 &
+  local pid="$!"
+  local start now elapsed exit_code
+  start="$(/bin/date +%s)"
+  printf "   Installing Hermes Python packages... 0s"
+  while kill -0 "$pid" >/dev/null 2>&1; do
+    now="$(/bin/date +%s)"
+    elapsed=$((now - start))
+    printf "\r   Installing Hermes Python packages... %s" "$(format_seconds "$elapsed")"
+    sleep 1
+  done
+  set +e
+  wait "$pid"
+  exit_code=$?
+  set -e
+  now="$(/bin/date +%s)"
+  elapsed=$((now - start))
+  if (( exit_code == 0 )); then
+    printf "\r   Installing Hermes Python packages... done in %s\n" "$(format_seconds "$elapsed")"
+  else
+    printf "\r   Installing Hermes Python packages... failed after %s\n" "$(format_seconds "$elapsed")"
+    return "$exit_code"
+  fi
+
+  /bin/mkdir -p "$HOME/.local/bin" "$HERMES_ROOT"/{cron,sessions,logs,pairing,hooks,image_cache,audio_cache,memories,skills}
+  /bin/ln -sf "$HERMES_CMD" "$HOME/.local/bin/hermes"
+  if [[ ! -f "$HERMES_ROOT/.env" ]]; then
+    if [[ -f "$HERMES_AGENT_ROOT/.env.example" ]]; then
+      /bin/cp "$HERMES_AGENT_ROOT/.env.example" "$HERMES_ROOT/.env"
+    else
+      : > "$HERMES_ROOT/.env"
+    fi
+  fi
+  if [[ ! -f "$HERMES_ROOT/config.yaml" && -f "$HERMES_AGENT_ROOT/cli-config.yaml.example" ]]; then
+    /bin/cp "$HERMES_AGENT_ROOT/cli-config.yaml.example" "$HERMES_ROOT/config.yaml"
+  fi
+  if [[ -f "$HERMES_AGENT_ROOT/tools/skills_sync.py" ]]; then
+    "$HERMES_AGENT_ROOT/venv/bin/python" "$HERMES_AGENT_ROOT/tools/skills_sync.py" >> "$LOG_FILE" 2>&1 || true
+  fi
 }
 
 need_profile_payload() {
@@ -130,13 +252,15 @@ mkdir -p "$INSTALL_ROOT" "$CONFIG_DIR"
 printf "Infobiz Agents install log\nStarted: %s\nMac architecture: %s\n" "$(/bin/date)" "$ARCH" >> "$LOG_FILE"
 
 say "Installing Hermes from official repository"
-official_installer="$TMPDIR/hermes-install.sh"
-download_file "$HERMES_INSTALL_URL" "$official_installer"
-chmod +x "$official_installer"
-run_logged "Installing Hermes dependencies and runtime" /bin/bash "$official_installer" \
-  --skip-setup \
-  --branch "$HERMES_BRANCH" \
-  --hermes-home "$HERMES_ROOT" || fail "Hermes official installer failed"
+if [[ -d "$HERMES_ROOT" ]]; then
+  backup="$HOME/.hermes.backup.$(/bin/date +%Y%m%d%H%M%S)"
+  /bin/mv "$HERMES_ROOT" "$backup"
+  printf "Existing ~/.hermes moved to %s\n" "$backup"
+fi
+/bin/mkdir -p "$HERMES_ROOT"
+ensure_uv || fail "Could not install uv"
+install_node_runtime || fail "Could not install Node.js runtime"
+install_hermes_from_source || fail "Hermes source install failed"
 
 [[ -x "$HERMES_CMD" ]] || fail "Hermes command not found: $HERMES_CMD"
 

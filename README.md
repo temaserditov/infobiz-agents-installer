@@ -2,12 +2,17 @@
 
 Preferred student install path for macOS.
 
-The installer uses the official Hermes repository and installer:
+The installer uses the official Hermes repository as the source of truth, but
+does not call the official interactive installer:
 
 - Hermes source: `https://github.com/NousResearch/hermes-agent`
-- Runtime/dependencies: installed by Hermes `scripts/install.sh --skip-setup`
+- Hermes source is downloaded as a GitHub tarball, not via `git clone`
+- `uv`, Python 3.11, Node.js, venv, and Hermes dependencies are installed
+  silently from the terminal installer
 - Student-facing output: quiet Infobiz steps only
 - Full technical output: `~/InfobizAgents/install.log`
+
+This avoids macOS Command Line Tools prompts on clean Macs.
 
 Our release payload contains only the `marketer` profile. It excludes auth,
 tokens, logs, sessions, state databases, and runtime files.
