@@ -1,6 +1,7 @@
 #!/bin/zsh
 set -euo pipefail
 setopt NULL_GLOB
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin"
 
 INSTALL_ROOT="$HOME/InfobizAgents"
 CONFIG_DIR="$HOME/.infobiz-agents"
