@@ -256,8 +256,7 @@ replace_student_paths() {
     -name '*.json' -o -name '*.py' -o -name '*.sh' \
   \) -print0 | while IFS= read -r -d '' file; do
     /usr/bin/perl -0pi \
-      -e "s#/Users/serditov#$ENV{HOME}#g" \
-      -e "s#/Users/nata#$ENV{HOME}#g" \
+      -e 'BEGIN { $home = $ENV{"HOME"} } s#/Users/serditov#$home#g; s#/Users/nata#$home#g' \
       "$file"
   done
 }
