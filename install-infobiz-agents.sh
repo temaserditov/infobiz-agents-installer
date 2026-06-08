@@ -55,6 +55,57 @@ format_seconds() {
   fi
 }
 
+format_bytes_mb() {
+  local bytes="$1"
+  /usr/bin/awk -v bytes="$bytes" 'BEGIN { printf "%.1f MB", bytes / 1024 / 1024 }'
+}
+
+download_payload() {
+  local url="$1"
+  local output="$2"
+  local total start now elapsed current percent eta exit_code
+
+  printf "Downloading installer package...\n" >&2
+  total="$(curl -fsSIL "$url" 2>/dev/null | /usr/bin/awk 'BEGIN { value = 0 } tolower($1) == "content-length:" { value = $2 } END { gsub("\r", "", value); print value + 0 }')"
+  [[ -n "$total" ]] || total=0
+
+  curl -fsSL "$url" -o "$output" &
+  local download_pid="$!"
+  start="$(/bin/date +%s)"
+
+  while kill -0 "$download_pid" >/dev/null 2>&1; do
+    current="$(/usr/bin/stat -f%z "$output" 2>/dev/null || printf "0")"
+    now="$(/bin/date +%s)"
+    elapsed=$((now - start))
+    if (( total > 0 )); then
+      percent=$((current * 100 / total))
+      if (( current > 0 && elapsed > 0 )); then
+        eta=$(((total - current) * elapsed / current))
+        printf "\r   Downloading: %s/%s (%s%%), elapsed %s, ETA %s" \
+          "$(format_bytes_mb "$current")" "$(format_bytes_mb "$total")" "$percent" "$(format_seconds "$elapsed")" "$(format_seconds "$eta")" >&2
+      else
+        printf "\r   Downloading: %s/%s (%s%%), elapsed %s, ETA calculating..." \
+          "$(format_bytes_mb "$current")" "$(format_bytes_mb "$total")" "$percent" "$(format_seconds "$elapsed")" >&2
+      fi
+    else
+      printf "\r   Downloading: %s, elapsed %s" "$(format_bytes_mb "$current")" "$(format_seconds "$elapsed")" >&2
+    fi
+    sleep 1
+  done
+
+  wait "$download_pid"
+  exit_code=$?
+  current="$(/usr/bin/stat -f%z "$output" 2>/dev/null || printf "0")"
+  now="$(/bin/date +%s)"
+  elapsed=$((now - start))
+  if (( exit_code == 0 )); then
+    printf "\r   Downloading: %s, done in %s                         \n" "$(format_bytes_mb "$current")" "$(format_seconds "$elapsed")" >&2
+  else
+    printf "\n" >&2
+  fi
+  return "$exit_code"
+}
+
 extract_payload() {
   local archive="$1"
   local destination="$2"
@@ -138,7 +189,7 @@ need_payload() {
     fail "PAYLOAD_URL or BASE_URL is not set."
   fi
   local downloaded="$TMPDIR/infobiz-agents-payload.tar.gz"
-  if ! curl -fsSL "$PAYLOAD_URL" -o "$downloaded"; then
+  if ! download_payload "$PAYLOAD_URL" "$downloaded"; then
     if [[ "$ARCH" == "x86_64" ]]; then
       fail "Intel Mac detected, but Intel payload is not available at: $PAYLOAD_URL"
     fi
