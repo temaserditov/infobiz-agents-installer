@@ -395,6 +395,7 @@ read_token() {
   fi
   if [[ -t 0 ]]; then
     printf "\nTelegram Bot Token можно оставить пустым и добавить позже.\n" >&2
+    printf "Если токена еще нет: откройте https://t.me/BotFather и отправьте /newbot.\n" >&2
     printf "Telegram Bot Token: " >&2
     local token
     read -r token
