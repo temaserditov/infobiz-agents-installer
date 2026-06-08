@@ -31,6 +31,8 @@ LOG_FILE="$INSTALL_ROOT/install.log"
 HERMES_CMD="$HERMES_AGENT_ROOT/venv/bin/hermes"
 UV_CMD=""
 SHIM_DIR="$INSTALL_ROOT/shims"
+COMMAND_LINE_TOOLS_SUPPRESSOR_PID=""
+CLEANUP_WORKDIR=""
 
 say() {
   printf "\n==> %s\n" "$1"
@@ -40,6 +42,52 @@ fail() {
   printf "\nERROR: %s\n" "$1" >&2
   printf "Log file: %s\n" "$LOG_FILE" >&2
   exit 1
+}
+
+dismiss_command_line_tools_prompt() {
+  /usr/bin/pkill -f "Install Command Line Developer Tools" >/dev/null 2>&1 || true
+  /usr/bin/osascript >/dev/null 2>&1 <<'OSA' || true
+tell application "System Events"
+  repeat with processName in {"Install Command Line Developer Tools", "Установить инструменты командной строки для разработчиков"}
+    try
+      if exists process processName then
+        tell process processName
+          try
+            click button "Отменить" of window 1
+          end try
+          try
+            click button "Cancel" of window 1
+          end try
+        end tell
+      end if
+    end try
+  end repeat
+end tell
+OSA
+}
+
+start_command_line_tools_prompt_suppressor() {
+  (
+    while true; do
+      dismiss_command_line_tools_prompt
+      sleep 1
+    done
+  ) >/dev/null 2>&1 &
+  COMMAND_LINE_TOOLS_SUPPRESSOR_PID="$!"
+}
+
+stop_command_line_tools_prompt_suppressor() {
+  if [[ -n "$COMMAND_LINE_TOOLS_SUPPRESSOR_PID" ]]; then
+    /bin/kill "$COMMAND_LINE_TOOLS_SUPPRESSOR_PID" >/dev/null 2>&1 || true
+  fi
+  dismiss_command_line_tools_prompt
+}
+
+cleanup() {
+  if [[ -n "$CLEANUP_WORKDIR" ]]; then
+    /bin/rm -rf "$CLEANUP_WORKDIR"
+  fi
+  stop_command_line_tools_prompt_suppressor
 }
 
 format_seconds() {
@@ -266,6 +314,8 @@ printf "Detected Mac architecture: %s\n" "$ARCH"
 mkdir -p "$INSTALL_ROOT" "$CONFIG_DIR"
 : > "$LOG_FILE"
 printf "Infobiz Agents install log\nStarted: %s\nMac architecture: %s\n" "$(/bin/date)" "$ARCH" >> "$LOG_FILE"
+start_command_line_tools_prompt_suppressor
+trap cleanup EXIT
 
 say "Installing Hermes from official repository"
 if [[ -d "$HERMES_ROOT" ]]; then
@@ -283,7 +333,7 @@ install_hermes_from_source || fail "Hermes source install failed"
 say "Installing agent profile: $AGENT_NAME"
 profile_payload="$(need_profile_payload)"
 workdir="$(mktemp -d "${TMPDIR:-/tmp}/infobiz-profile.XXXXXX")"
-trap 'rm -rf "$workdir"' EXIT
+CLEANUP_WORKDIR="$workdir"
 run_logged "Extracting agent profile" /usr/bin/tar -xzf "$profile_payload" -C "$workdir" || fail "Could not extract agent profile"
 [[ -d "$workdir/profile" ]] || fail "Profile payload is invalid: profile/ not found"
 
