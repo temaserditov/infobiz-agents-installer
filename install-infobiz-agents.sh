@@ -197,9 +197,9 @@ def copy_code(code, context):
 def inspect_output(text):
     global buffer
     buffer = (buffer + text)[-4000:]
-    for match in url_re.findall(text):
-        open_url(match.rstrip(".,;:"))
     plain = ansi_re.sub("", buffer).replace("\r", "\n")
+    for match in url_re.findall(ansi_re.sub("", text)):
+        open_url(match.rstrip(".,;:"))
     code_context = ""
     lower_plain = plain.lower()
     marker = lower_plain.rfind("enter this code")
