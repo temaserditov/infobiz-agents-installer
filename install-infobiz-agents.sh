@@ -46,24 +46,6 @@ fail() {
 
 dismiss_command_line_tools_prompt() {
   /usr/bin/pkill -f "Install Command Line Developer Tools" >/dev/null 2>&1 || true
-  /usr/bin/osascript >/dev/null 2>&1 <<'OSA' || true
-tell application "System Events"
-  repeat with processName in {"Install Command Line Developer Tools", "Установить инструменты командной строки для разработчиков"}
-    try
-      if exists process processName then
-        tell process processName
-          try
-            click button "Отменить" of window 1
-          end try
-          try
-            click button "Cancel" of window 1
-          end try
-        end tell
-      end if
-    end try
-  end repeat
-end tell
-OSA
 }
 
 start_command_line_tools_prompt_suppressor() {
