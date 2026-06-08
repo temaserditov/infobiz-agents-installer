@@ -1,5 +1,6 @@
 #!/bin/zsh
 set -euo pipefail
+setopt NULL_GLOB
 
 INSTALL_ROOT="$HOME/InfobizAgents"
 CONFIG_DIR="$HOME/.infobiz-agents"
