@@ -16,6 +16,8 @@ HERMES_AGENT_ROOT="$HERMES_ROOT/hermes-agent"
 RUNTIME_ROOT="$INSTALL_ROOT/runtime"
 PYTHON_ROOT="$RUNTIME_ROOT/python"
 PYTHON_BIN="$PYTHON_ROOT/bin/python3.11"
+NODE_ROOT="$RUNTIME_ROOT/node"
+NODE_BIN="$NODE_ROOT/bin/node"
 HERMES_PYTHON="$HERMES_AGENT_ROOT/venv/bin/python3"
 
 say() {
@@ -85,6 +87,14 @@ ditto "$workdir/payload/runtime/python" "$PYTHON_ROOT"
 xattr -dr com.apple.quarantine "$PYTHON_ROOT" >/dev/null 2>&1 || true
 xattr -dr com.apple.provenance "$PYTHON_ROOT" >/dev/null 2>&1 || true
 
+if [[ -d "$workdir/payload/runtime/node" ]]; then
+  say "Installing Node.js runtime"
+  rm -rf "$NODE_ROOT"
+  ditto "$workdir/payload/runtime/node" "$NODE_ROOT"
+  xattr -dr com.apple.quarantine "$NODE_ROOT" >/dev/null 2>&1 || true
+  xattr -dr com.apple.provenance "$NODE_ROOT" >/dev/null 2>&1 || true
+fi
+
 say "Installing Hermes"
 if [[ -d "$HERMES_ROOT" ]]; then
   backup="$HOME/.hermes.backup.$(/bin/date +%Y%m%d%H%M%S)"
@@ -99,6 +109,9 @@ xattr -dr com.apple.provenance "$HERMES_ROOT" "$INSTALL_ROOT" >/dev/null 2>&1 ||
 
 [[ -d "$HERMES_AGENT_ROOT/venv/bin" ]] || fail "Hermes venv is missing"
 [[ -x "$PYTHON_BIN" ]] || fail "Bundled Python is missing: $PYTHON_BIN"
+if [[ -d "$workdir/payload/runtime/node" ]]; then
+  [[ -x "$NODE_BIN" ]] || fail "Bundled Node.js is missing: $NODE_BIN"
+fi
 
 say "Linking Hermes venv to bundled Python"
 rm -f "$HERMES_AGENT_ROOT/venv/bin/python" "$HERMES_AGENT_ROOT/venv/bin/python3" "$HERMES_AGENT_ROOT/venv/bin/python3.11"
@@ -139,6 +152,7 @@ TELEGRAM_BOT_TOKEN=$(shell_quote "$telegram_token")
 HERMES_INFERENCE_PROVIDER='openai-codex'
 HERMES_INFERENCE_MODEL='gpt-5.5'
 HERMES_HOME=$(shell_quote "$HERMES_ROOT")
+PATH=$(shell_quote "$NODE_ROOT/bin:$HERMES_AGENT_ROOT/venv/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin")
 ENV
 chmod 600 "$HERMES_ROOT/.env"
 
@@ -147,22 +161,27 @@ TELEGRAM_BOT_TOKEN=$(shell_quote "$telegram_token")
 HERMES_INFERENCE_PROVIDER='openai-codex'
 HERMES_INFERENCE_MODEL='gpt-5.5'
 HERMES_HOME=$(shell_quote "$HERMES_ROOT/profiles/$AGENT_PROFILE")
+PATH=$(shell_quote "$NODE_ROOT/bin:$HERMES_AGENT_ROOT/venv/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin")
 ENV
 chmod 600 "$HERMES_ROOT/profiles/$AGENT_PROFILE/.env"
 
 say "Checking bundled Python"
 "$HERMES_PYTHON" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)" || fail "Bundled Python cannot run"
+if [[ -x "$NODE_BIN" ]]; then
+  say "Checking bundled Node.js"
+  "$NODE_BIN" --version >/dev/null || fail "Bundled Node.js cannot run"
+fi
 
 say "OpenAI/Hermes authorization"
 printf "Follow the instructions below. After auth finishes, installer will continue.\n"
-HERMES_HOME="$HERMES_ROOT" HERMES_INFERENCE_PROVIDER=openai-codex HERMES_INFERENCE_MODEL=gpt-5.5 \
+PATH="$NODE_ROOT/bin:$HERMES_AGENT_ROOT/venv/bin:$PATH" HERMES_HOME="$HERMES_ROOT" HERMES_INFERENCE_PROVIDER=openai-codex HERMES_INFERENCE_MODEL=gpt-5.5 \
   "$HERMES_PYTHON" "$HERMES_AGENT_ROOT/cli.py" auth add openai-codex
 
 say "Installing Hermes gateway service for profile: $AGENT_PROFILE"
-HERMES_HOME="$HERMES_ROOT" "$HERMES_PYTHON" "$HERMES_AGENT_ROOT/cli.py" --profile "$AGENT_PROFILE" gateway install || true
+PATH="$NODE_ROOT/bin:$HERMES_AGENT_ROOT/venv/bin:$PATH" HERMES_HOME="$HERMES_ROOT" "$HERMES_PYTHON" "$HERMES_AGENT_ROOT/cli.py" --profile "$AGENT_PROFILE" gateway install || true
 
 say "Starting Hermes gateway"
-HERMES_HOME="$HERMES_ROOT" "$HERMES_PYTHON" "$HERMES_AGENT_ROOT/cli.py" --profile "$AGENT_PROFILE" gateway start || true
+PATH="$NODE_ROOT/bin:$HERMES_AGENT_ROOT/venv/bin:$PATH" HERMES_HOME="$HERMES_ROOT" "$HERMES_PYTHON" "$HERMES_AGENT_ROOT/cli.py" --profile "$AGENT_PROFILE" gateway start || true
 
 say "Done"
 printf "Installed %s. Send a message to the connected Telegram bot.\n" "$AGENT_NAME"

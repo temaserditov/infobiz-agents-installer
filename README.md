@@ -6,6 +6,9 @@ Install the marketer Hermes agent on macOS:
 BASE_URL="https://github.com/temaserditov/infobiz-agents-installer/releases/download/v0.1.0" /bin/zsh -c "$(curl -fsSL https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/install-infobiz-agents.sh)"
 ```
 
+The installer bundles Hermes, Python, and Node.js inside the release payload.
+It does not ask students whether to install missing dependencies.
+
 Uninstall all test installer artifacts:
 
 ```bash
