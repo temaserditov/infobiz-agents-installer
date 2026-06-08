@@ -168,7 +168,7 @@ install_hermes_from_source() {
   export VIRTUAL_ENV="$HERMES_AGENT_ROOT/venv"
   (
     cd "$HERMES_AGENT_ROOT"
-    "$UV_CMD" pip install -e ".[${HERMES_EXTRAS}]"
+    "$UV_CMD" pip install --only-binary=:all: -e ".[${HERMES_EXTRAS}]"
   ) >> "$LOG_FILE" 2>&1 &
   local pid="$!"
   local start now elapsed exit_code
