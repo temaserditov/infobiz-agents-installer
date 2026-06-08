@@ -25,6 +25,7 @@ PROFILE_ROOT="$HERMES_ROOT/profiles/$AGENT_PROFILE"
 LOG_FILE="$INSTALL_ROOT/install.log"
 HERMES_CMD="$HERMES_AGENT_ROOT/venv/bin/hermes"
 UV_CMD=""
+SHIM_DIR="$INSTALL_ROOT/shims"
 
 say() {
   printf "\n==> %s\n" "$1"
@@ -166,6 +167,15 @@ install_hermes_from_source() {
   run_logged "Installing Python $PYTHON_VERSION" "$UV_CMD" python install "$PYTHON_VERSION" || return 1
   run_logged "Creating Hermes virtual environment" "$UV_CMD" venv "$HERMES_AGENT_ROOT/venv" --python "$PYTHON_VERSION" || return 1
   export VIRTUAL_ENV="$HERMES_AGENT_ROOT/venv"
+  /bin/mkdir -p "$SHIM_DIR"
+  cat > "$SHIM_DIR/install_name_tool" <<'SHIM'
+#!/bin/sh
+# Prevent macOS from launching the Command Line Tools installer on clean Macs.
+exit 0
+SHIM
+  /bin/chmod +x "$SHIM_DIR/install_name_tool"
+  export INSTALL_NAME_TOOL="$SHIM_DIR/install_name_tool"
+  export PATH="$SHIM_DIR:$PATH"
   (
     cd "$HERMES_AGENT_ROOT"
     "$UV_CMD" pip install --only-binary=:all: -e ".[${HERMES_EXTRAS}]"
