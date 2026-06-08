@@ -44,6 +44,88 @@ wait_with_timer() {
   return "$status"
 }
 
+format_seconds() {
+  local seconds="$1"
+  local minutes=$((seconds / 60))
+  local rest=$((seconds % 60))
+  if (( minutes > 0 )); then
+    printf "%dm %02ds" "$minutes" "$rest"
+  else
+    printf "%ss" "$rest"
+  fi
+}
+
+extract_payload() {
+  local archive="$1"
+  local destination="$2"
+  local total_file="$destination/.infobiz-extract-total"
+  local count_file="$destination/.infobiz-extract-count"
+  local total count elapsed eta percent start now status
+
+  printf "Preparing progress estimate...\n"
+  (tar -tzf "$archive" | /usr/bin/wc -l | /usr/bin/tr -d ' ' > "$total_file") &
+  wait_with_timer "$!" "Scanning archive" || return 1
+
+  total="$(cat "$total_file" 2>/dev/null || printf "0")"
+  if [[ -z "$total" || "$total" == "0" ]]; then
+    tar -xzf "$archive" -C "$destination"
+    return $?
+  fi
+
+  printf "This can take a few minutes on a clean Mac.\n"
+  printf "Archive entries: %s\n" "$total"
+  printf "0" > "$count_file"
+  start="$(/bin/date +%s)"
+
+  (
+    tar -xzvf "$archive" -C "$destination" 2>&1 | /usr/bin/awk -v file="$count_file" '
+      BEGIN { count = 0 }
+      {
+        count += 1
+        if (count % 50 == 0) {
+          print count > file
+          close(file)
+        }
+      }
+      END {
+        print count > file
+        close(file)
+      }
+    '
+  ) &
+  local extract_pid="$!"
+
+  while kill -0 "$extract_pid" >/dev/null 2>&1; do
+    count="$(cat "$count_file" 2>/dev/null || printf "0")"
+    [[ -n "$count" ]] || count=0
+    now="$(/bin/date +%s)"
+    elapsed=$((now - start))
+    percent=$((count * 100 / total))
+    if (( count > 0 && elapsed > 0 )); then
+      eta=$(((total - count) * elapsed / count))
+      printf "\r   Extracting: %s/%s (%s%%), elapsed %s, ETA %s" \
+        "$count" "$total" "$percent" "$(format_seconds "$elapsed")" "$(format_seconds "$eta")"
+    else
+      printf "\r   Extracting: %s/%s (%s%%), elapsed %s, ETA calculating..." \
+        "$count" "$total" "$percent" "$(format_seconds "$elapsed")"
+    fi
+    sleep 1
+  done
+
+  wait "$extract_pid"
+  status=$?
+  count="$(cat "$count_file" 2>/dev/null || printf "$total")"
+  now="$(/bin/date +%s)"
+  elapsed=$((now - start))
+  if (( status == 0 )); then
+    printf "\r   Extracting: %s/%s (100%%), done in %s               \n" \
+      "$count" "$total" "$(format_seconds "$elapsed")"
+  else
+    printf "\n"
+  fi
+  return "$status"
+}
+
 need_payload() {
   if [[ -n "$PAYLOAD_TARBALL" && -f "$PAYLOAD_TARBALL" ]]; then
     printf "%s" "$PAYLOAD_TARBALL"
@@ -87,9 +169,7 @@ workdir="$(mktemp -d "${TMPDIR:-/tmp}/infobiz-install.XXXXXX")"
 trap 'rm -rf "$workdir"' EXIT
 
 say "Extracting installer payload"
-printf "This can take a few minutes on a clean Mac.\n"
-tar -xzf "$payload" -C "$workdir" &
-wait_with_timer "$!" "Extracting"
+extract_payload "$payload" "$workdir" || fail "Could not extract installer payload"
 [[ -d "$workdir/payload/hermes/hermes-agent" ]] || fail "payload/hermes/hermes-agent not found"
 [[ -d "$workdir/payload/runtime/python" ]] || fail "payload/runtime/python not found"
 
