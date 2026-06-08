@@ -29,6 +29,21 @@ fail() {
   exit 1
 }
 
+wait_with_timer() {
+  local pid="$1"
+  local label="$2"
+  local elapsed=0
+  while kill -0 "$pid" >/dev/null 2>&1; do
+    printf "\r   %s... %ss" "$label" "$elapsed"
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+  wait "$pid"
+  local status=$?
+  printf "\r   %s... done in %ss\n" "$label" "$elapsed"
+  return "$status"
+}
+
 need_payload() {
   if [[ -n "$PAYLOAD_TARBALL" && -f "$PAYLOAD_TARBALL" ]]; then
     printf "%s" "$PAYLOAD_TARBALL"
@@ -72,7 +87,9 @@ workdir="$(mktemp -d "${TMPDIR:-/tmp}/infobiz-install.XXXXXX")"
 trap 'rm -rf "$workdir"' EXIT
 
 say "Extracting installer payload"
-tar -xzf "$payload" -C "$workdir"
+printf "This can take a few minutes on a clean Mac.\n"
+tar -xzf "$payload" -C "$workdir" &
+wait_with_timer "$!" "Extracting"
 [[ -d "$workdir/payload/hermes/hermes-agent" ]] || fail "payload/hermes/hermes-agent not found"
 [[ -d "$workdir/payload/runtime/python" ]] || fail "payload/runtime/python not found"
 
