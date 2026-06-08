@@ -13,7 +13,12 @@ PROFILE_TARBALL="${PROFILE_TARBALL:-}"
 HERMES_BRANCH="${HERMES_BRANCH:-main}"
 HERMES_SOURCE_URL="${HERMES_SOURCE_URL:-https://github.com/NousResearch/hermes-agent/archive/refs/heads/$HERMES_BRANCH.tar.gz}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.11}"
-HERMES_EXTRAS="${HERMES_EXTRAS:-messaging,cli,pty,mcp}"
+HERMES_EXTRAS="${HERMES_EXTRAS:-cli,mcp}"
+TELEGRAM_PACKAGES=(
+  "python-telegram-bot[webhooks]==22.6"
+  "aiohttp==3.13.3"
+  "qrcode==7.4.2"
+)
 NODE_VERSION="${NODE_VERSION:-22}"
 ARCH="$(/usr/bin/uname -m)"
 
@@ -203,6 +208,7 @@ SHIM
     printf "\r   Installing Hermes Python packages... failed after %s\n" "$(format_seconds "$elapsed")"
     return "$exit_code"
   fi
+  run_logged "Installing Telegram support" "$UV_CMD" pip install --only-binary=:all: "${TELEGRAM_PACKAGES[@]}" || return 1
 
   /bin/mkdir -p "$HOME/.local/bin" "$HERMES_ROOT"/{cron,sessions,logs,pairing,hooks,image_cache,audio_cache,memories,skills}
   /bin/ln -sf "$HERMES_CMD" "$HOME/.local/bin/hermes"
