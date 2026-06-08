@@ -148,7 +148,8 @@ import sys
 
 argv = sys.argv[1:]
 url_re = re.compile(r"https?://[^\s)>\]\"']+")
-code_re = re.compile(r"\b[A-Z0-9]{4,}(?:-[A-Z0-9]{4,})+\b")
+ansi_re = re.compile(r"\x1b\[[0-9;]*m")
+code_re = re.compile(r"\b[A-Z0-9][A-Z0-9 -]{3,30}[A-Z0-9]\b")
 opened_urls = set()
 copied_codes = set()
 buffer = ""
@@ -198,10 +199,21 @@ def inspect_output(text):
     buffer = (buffer + text)[-4000:]
     for match in url_re.findall(text):
         open_url(match.rstrip(".,;:"))
-    for match in code_re.findall(buffer):
-        start = max(0, buffer.find(match) - 160)
-        end = min(len(buffer), buffer.find(match) + len(match) + 160)
-        copy_code(match, buffer[start:end])
+    plain = ansi_re.sub("", buffer).replace("\r", "\n")
+    code_context = ""
+    lower_plain = plain.lower()
+    marker = lower_plain.rfind("enter this code")
+    if marker >= 0:
+        code_context = plain[marker:marker + 500]
+    else:
+        marker = lower_plain.rfind("authorization code")
+        if marker >= 0:
+            code_context = plain[marker:marker + 500]
+    if code_context:
+        for raw in code_re.findall(code_context):
+            code = re.sub(r"\s+", "-", raw.strip())
+            if len(code.replace("-", "")) >= 4:
+                copy_code(code, "code: " + code_context)
 
 
 pid, fd = pty.fork()
