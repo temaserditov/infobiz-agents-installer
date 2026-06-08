@@ -395,13 +395,24 @@ read_token() {
   fi
   if [[ -t 0 ]]; then
     printf "\nTelegram Bot Token можно оставить пустым и добавить позже.\n" >&2
-    printf "Если токена еще нет: откройте https://t.me/BotFather и отправьте /newbot.\n" >&2
+    open_botfather
+    printf "Если токена еще нет: Telegram должен открыться с командой /newbot.\n" >&2
+    printf "Если не открылся: https://t.me/BotFather и отправьте /newbot.\n" >&2
     printf "Telegram Bot Token: " >&2
     local token
     read -r token
     printf "%s" "$token"
   else
     printf "%s" ""
+  fi
+}
+
+open_botfather() {
+  if [[ "${INFOBIZ_OPEN_TELEGRAM:-1}" != "1" ]]; then
+    return 0
+  fi
+  if [[ -x /usr/bin/open ]]; then
+    /usr/bin/open "tg://resolve?domain=BotFather&text=%2Fnewbot" >/dev/null 2>&1 || true
   fi
 }
 
