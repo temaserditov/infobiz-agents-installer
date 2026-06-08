@@ -389,7 +389,19 @@ need_profile_payload() {
 }
 
 read_token() {
-  printf "%s" "${TELEGRAM_BOT_TOKEN:-}"
+  if [[ -n "${TELEGRAM_BOT_TOKEN:-}" ]]; then
+    printf "%s" "$TELEGRAM_BOT_TOKEN"
+    return 0
+  fi
+  if [[ -t 0 ]]; then
+    printf "\nTelegram Bot Token можно оставить пустым и добавить позже.\n" >&2
+    printf "Telegram Bot Token: " >&2
+    local token
+    read -r token
+    printf "%s" "$token"
+  else
+    printf "%s" ""
+  fi
 }
 
 replace_student_paths() {
