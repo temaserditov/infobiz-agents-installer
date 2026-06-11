@@ -15,6 +15,9 @@
             <div id="brandSubtitle" class="brand-subtitle">локальная панель без Telegram</div>
           </div>
           <div class="brand-actions">
+            <button id="settingsBtn" class="icon-button" title="Настройки" aria-label="Настройки">
+              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M19.4 13.5c.1-.5.1-1 .1-1.5s0-1-.1-1.5l2-1.5-2-3.5-2.4 1a8 8 0 0 0-2.6-1.5L14 2h-4l-.4 2.5A8 8 0 0 0 7 6L4.6 5l-2 3.5 2 1.5c-.1.5-.1 1-.1 1.5s0 1 .1 1.5l-2 1.5 2 3.5L7 17a8 8 0 0 0 2.6 1.5L10 21h4l.4-2.5A8 8 0 0 0 17 17l2.4 1 2-3.5-2-1.5zM12 15.5A3.5 3.5 0 1 1 12 8a3.5 3.5 0 0 1 0 7.5z"/></svg>
+            </button>
             <button id="newChatBtn" class="icon-button" title="Создать чат" aria-label="Создать чат">
               <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M5 4h6.5a1 1 0 0 1 0 2H6v12h12v-5.5a1 1 0 0 1 2 0V19a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/><path fill="currentColor" d="M20.5 3.5a2.1 2.1 0 0 1 0 3l-7.3 7.3-3.4.8.8-3.4 7.3-7.3a2.1 2.1 0 0 1 2.6-.4z"/></svg>
             </button>
@@ -192,6 +195,28 @@
           <div class="profile-section-title">Участники<span id="gcCount" class="profile-section-count"></span></div>
           <div id="gcMembers" class="member-list"></div>
         </div>
+      </div>
+    </div>
+
+    <div id="settingsPanel" class="profile-panel" hidden>
+      <header class="profile-bar">
+        <button id="settingsClose" type="button" class="card-icon-btn" aria-label="Назад">
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M15.4 7.4 14 6l-6 6 6 6 1.4-1.4-4.6-4.6z"/></svg>
+        </button>
+        <span class="profile-bar-title">Настройки</span>
+      </header>
+      <div class="profile-scroll">
+        <section class="profile-section">
+          <div class="profile-section-title">Telegram</div>
+          <div id="telegramStatus" class="settings-status">Проверяю…</div>
+          <label class="card-label" for="telegramToken">Bot Token</label>
+          <div class="token-row">
+            <input id="telegramToken" class="card-input" type="password" autocomplete="off" spellcheck="false" placeholder="1234567890:AA..." />
+            <button id="telegramToggle" type="button" class="card-text-btn">Показать</button>
+          </div>
+          <button id="telegramSave" type="button" class="settings-save">Сохранить и перезапустить Telegram</button>
+          <div id="telegramHint" class="settings-hint">Токен можно взять у BotFather. Поле можно оставить пустым, если Telegram пока не нужен.</div>
+        </section>
       </div>
     </div>
 

@@ -22,6 +22,8 @@ PROFILE_TARBALL="${PROFILE_TARBALL:-}"
 WEB_SHELL_URL="${WEB_SHELL_URL:-}"
 WEB_SHELL_TARBALL="${WEB_SHELL_TARBALL:-}"
 WEB_SHELL_PORT="${WEB_SHELL_PORT:-8787}"
+WEB_SHELL_HOST="${WEB_SHELL_HOST:-127.0.0.1}"
+WEB_SHELL_PUBLIC_URL="${WEB_SHELL_PUBLIC_URL:-}"
 HERMES_BRANCH="${HERMES_BRANCH:-main}"
 HERMES_SOURCE_URL="${HERMES_SOURCE_URL:-https://github.com/NousResearch/hermes-agent/archive/refs/heads/$HERMES_BRANCH.tar.gz}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.11}"
@@ -445,7 +447,7 @@ install_web_shell() {
   fi
 
   port="$(choose_web_shell_port)"
-  url="http://127.0.0.1:$port"
+  url="${WEB_SHELL_PUBLIC_URL:-http://$WEB_SHELL_HOST:$port}"
   /bin/mkdir -p "$INSTALL_ROOT/workspace" "$INSTALL_ROOT/obsidian-vault" "$HOME/.hermes-workspaces"
   printf "%s\n" "$url" > "$INSTALL_ROOT/web-shell.url"
 
@@ -478,6 +480,8 @@ install_web_shell() {
   <dict>
     <key>PORT</key>
     <string>$port</string>
+    <key>HOST</key>
+    <string>$WEB_SHELL_HOST</string>
     <key>HERMES_ROOT</key>
     <string>$HERMES_ROOT</string>
     <key>HERMES_AGENT_ROOT</key>
@@ -575,34 +579,6 @@ APP
   printf "%s" "$app_path"
 }
 
-read_token() {
-  if [[ -n "${TELEGRAM_BOT_TOKEN:-}" ]]; then
-    printf "%s" "$TELEGRAM_BOT_TOKEN"
-    return 0
-  fi
-  if [[ -t 0 ]]; then
-    printf "\nTelegram Bot Token можно оставить пустым и добавить позже.\n" >&2
-    open_botfather
-    printf "Если токена еще нет: Telegram должен открыться с командой /newbot.\n" >&2
-    printf "Если не открылся: https://t.me/BotFather и отправьте /newbot.\n" >&2
-    printf "Telegram Bot Token: " >&2
-    local token
-    read -r token
-    printf "%s" "$token"
-  else
-    printf "%s" ""
-  fi
-}
-
-open_botfather() {
-  if [[ "${INFOBIZ_OPEN_TELEGRAM:-1}" != "1" ]]; then
-    return 0
-  fi
-  if [[ -x /usr/bin/open ]]; then
-    /usr/bin/open "tg://resolve?domain=BotFather&text=%2Fnewbot" >/dev/null 2>&1 || true
-  fi
-}
-
 replace_student_paths() {
   local root="$1"
   find "$root" -type f \( \
@@ -655,11 +631,9 @@ fi
 replace_student_paths "$PROFILE_ROOT"
 /bin/mkdir -p "$PROFILE_ROOT/logs" "$PROFILE_ROOT/sessions" "$PROFILE_ROOT/cache" "$PROFILE_ROOT/memories" "$PROFILE_ROOT/cron"
 
-telegram_token="$(read_token)"
-
 say "Writing agent configuration"
 cat > "$PROFILE_ROOT/.env" <<ENV
-TELEGRAM_BOT_TOKEN=$(shell_quote "$telegram_token")
+TELEGRAM_BOT_TOKEN=''
 GATEWAY_ALLOW_ALL_USERS='true'
 HERMES_INFERENCE_PROVIDER='openai-codex'
 HERMES_INFERENCE_MODEL='gpt-5.5'
@@ -696,7 +670,7 @@ say "Creating Applications shortcut"
 web_shell_app="$(install_web_shell_launcher)" || fail "Could not create web panel shortcut"
 
 say "Done"
-printf "Installed %s. Send a message to the connected Telegram bot or open the web panel:\n" "$AGENT_NAME"
+printf "Installed %s. Open the web panel to configure Telegram and use the agent:\n" "$AGENT_NAME"
 printf "%s\n" "$web_shell_url"
 printf "Shortcut: %s\n" "$web_shell_app"
 printf "Log file: %s\n" "$LOG_FILE"

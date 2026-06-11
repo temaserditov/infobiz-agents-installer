@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const PORT = Number(process.env.PORT || 8787);
+const HOST = process.env.HOST || process.env.WEB_SHELL_HOST || "127.0.0.1";
 const HOME_DIR = process.env.HOME || process.env.USERPROFILE || "/tmp";
 const LOCAL_BIN = join(HOME_DIR, ".local", "bin");
 const LAUNCH_AGENTS_DIR = join(HOME_DIR, "Library", "LaunchAgents");
@@ -1837,6 +1838,18 @@ function resetAgentSessions(agentId) {
   return { ...result, restarted: true };
 }
 
+function restartAgentGateway(agentId) {
+  const dir = profileDir(agentId);
+  if (!existsSync(dir)) throw new Error(`profile not found: ${agentId}`);
+  const uid = String(process.getuid?.() || 501);
+  const label = gatewayLabel(agentId);
+  const plist = join(LAUNCH_AGENTS_DIR, `${label}.plist`);
+  runCommand("launchctl", ["bootout", `gui/${uid}/${label}`]);
+  if (existsSync(plist)) runCommand("launchctl", ["bootstrap", `gui/${uid}`, plist]);
+  runCommand("launchctl", ["kickstart", "-k", `gui/${uid}/${label}`]);
+  return { ok: true, restarted: true, label };
+}
+
 function archiveAgentSessions(agentId, reason = "web-archive") {
   const dir = profileDir(agentId);
   if (!existsSync(dir)) throw new Error(`profile not found: ${agentId}`);
@@ -1852,6 +1865,66 @@ function archiveAgentSessions(agentId, reason = "web-archive") {
   mkdirSync(sessionDir, { recursive: true });
   writeFileSync(join(sessionDir, "sessions.json"), "{}\n", "utf8");
   return { ok: true, archive, sessions: join(sessionDir, "sessions.json"), restarted: false };
+}
+
+function envPath(agentId) {
+  return join(profileDir(agentId), ".env");
+}
+
+function envSingleQuote(value) {
+  return `'${String(value || "").replace(/'/g, "'\\''")}'`;
+}
+
+function readEnvValue(text, key) {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = text.match(new RegExp(`^${escaped}=(.*)$`, "m"));
+  if (!match) return "";
+  const raw = match[1].trim();
+  if ((raw.startsWith("'") && raw.endsWith("'")) || (raw.startsWith('"') && raw.endsWith('"'))) {
+    return raw.slice(1, -1);
+  }
+  return raw;
+}
+
+function writeEnvValue(text, key, value) {
+  const line = `${key}=${envSingleQuote(value)}`;
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (new RegExp(`^${escaped}=`, "m").test(text)) {
+    return text.replace(new RegExp(`^${escaped}=.*$`, "m"), line);
+  }
+  return `${text.replace(/\s*$/, "")}\n${line}\n`;
+}
+
+function telegramSettings(agentId) {
+  const path = envPath(agentId);
+  const text = readText(path, "");
+  const token = readEnvValue(text, "TELEGRAM_BOT_TOKEN");
+  return {
+    ok: existsSync(profileDir(agentId)),
+    profile: agentId,
+    configured: Boolean(token),
+    tokenPreview: token ? `${token.slice(0, 6)}...${token.slice(-4)}` : "",
+    envPath: path,
+    gateway: agentDiagnostics(agentId).gateway.status,
+  };
+}
+
+function saveTelegramToken(agentId, token) {
+  if (!/^[0-9]+:[A-Za-z0-9_-]{20,}$/.test(token) && token !== "") {
+    throw new Error("invalid Telegram bot token");
+  }
+  const path = envPath(agentId);
+  let text = readText(path, "");
+  if (!text) text = "";
+  text = writeEnvValue(text, "TELEGRAM_BOT_TOKEN", token);
+  writeFileSync(path, text, { encoding: "utf8", mode: 0o600 });
+  let restart = { ok: false, restarted: false };
+  try {
+    restart = restartAgentGateway(agentId);
+  } catch (error) {
+    restart = { ok: false, restarted: false, error: error.message || String(error) };
+  }
+  return { ok: true, settings: telegramSettings(agentId), restart };
 }
 
 function resourceSummary() {
@@ -2254,6 +2327,8 @@ function routeSummary() {
     { method: "GET", path: "/api/agents/:id/chats", group: "agent", description: "последние реальные Hermes-сессии профиля" },
     { method: "GET", path: "/api/agents/:id/chats/:sessionId/messages", group: "agent", description: "сообщения реальной Hermes-сессии" },
     { method: "GET", path: "/api/agents/:id/logs", group: "agent", description: "tail gateway.log профиля" },
+    { method: "GET", path: "/api/agents/:id/telegram", group: "agent", description: "статус Telegram Bot Token без раскрытия токена" },
+    { method: "POST", path: "/api/agents/:id/telegram", group: "agent", description: "сохраняет Telegram Bot Token и перезапускает gateway" },
     { method: "POST", path: "/api/agents/:id/archive-sessions", group: "agent", description: "архивирует sessions без перезапуска gateway" },
     { method: "POST", path: "/api/agents/:id/reset-sessions", group: "agent", description: "архивирует sessions и перезапускает gateway профиля" },
     { method: "GET", path: "/api/runs", group: "runs", description: "история web runs" },
@@ -3190,6 +3265,18 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    const agentTelegramMatch = url.pathname.match(/^\/api\/agents\/([^/]+)\/telegram$/);
+    if (req.method === "GET" && agentTelegramMatch) {
+      sendJson(res, 200, telegramSettings(agentTelegramMatch[1]));
+      return;
+    }
+
+    if (req.method === "POST" && agentTelegramMatch) {
+      const body = await readBody(req);
+      sendJson(res, 200, saveTelegramToken(agentTelegramMatch[1], String(body.token || "").trim()));
+      return;
+    }
+
     const agentChatsMatch = url.pathname.match(/^\/api\/agents\/([^/]+)\/chats$/);
     if (req.method === "GET" && agentChatsMatch) {
       sendJson(res, 200, listAgentChats(agentChatsMatch[1]));
@@ -3429,6 +3516,6 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, "127.0.0.1", () => {
-  console.log(`Agent web shell: http://127.0.0.1:${PORT}`);
+server.listen(PORT, HOST, () => {
+  console.log(`Agent web shell: http://${HOST}:${PORT}`);
 });

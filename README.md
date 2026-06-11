@@ -13,6 +13,10 @@ does not call the official interactive installer:
   as a user LaunchAgent
 - An `Infobiz Agents.app` launcher is created in `/Applications` when possible,
   otherwise in `~/Applications`
+- Telegram Bot Token is configured in the web panel after install, not in the
+  terminal installer
+- VPS installers can provide `WEB_SHELL_PUBLIC_URL` when the panel is exposed
+  through a tunnel or public HTTPS endpoint
 - Student-facing output: quiet Infobiz steps only
 - Full technical output: `~/InfobizAgents/install.log`
 

@@ -32,6 +32,7 @@ const state = {
   inventory: null,
   modelMatrix: null,
   configDrift: null,
+  telegramSettings: null,
   routes: null,
   snapshots: [],
   maintenance: null,
@@ -120,6 +121,13 @@ const els = {
   ctxArc: document.querySelector("#ctxArc") || nullEl,
   ctxTip: document.querySelector("#ctxTip") || nullEl,
   newChatBtn: document.querySelector("#newChatBtn") || nullEl,
+  settingsBtn: document.querySelector("#settingsBtn") || nullEl,
+  settingsPanel: document.querySelector("#settingsPanel") || nullEl,
+  settingsClose: document.querySelector("#settingsClose") || nullEl,
+  telegramStatus: document.querySelector("#telegramStatus") || nullEl,
+  telegramToken: document.querySelector("#telegramToken") || nullEl,
+  telegramToggle: document.querySelector("#telegramToggle") || nullEl,
+  telegramSave: document.querySelector("#telegramSave") || nullEl,
   createGroup: document.querySelector("#createGroup") || nullEl,
   cgBack: document.querySelector("#cgBack") || nullEl,
   cgTitle: document.querySelector("#cgTitle") || nullEl,
@@ -779,6 +787,61 @@ async function loadAgents() {
   }
   renderAgents();
   updateActive();
+}
+
+function settingsAgentId() {
+  return state.active || state.agents[0]?.id || "marketer";
+}
+
+async function loadTelegramSettings() {
+  const data = await api(`/api/agents/${settingsAgentId()}/telegram`);
+  state.telegramSettings = data;
+  renderTelegramSettings();
+}
+
+function renderTelegramSettings(message = "") {
+  const settings = state.telegramSettings;
+  const configured = Boolean(settings?.configured);
+  els.telegramStatus.className = `settings-status ${configured ? "ok" : ""}`;
+  els.telegramStatus.textContent = message || (configured
+    ? `Telegram подключен: ${settings.tokenPreview}`
+    : "Telegram еще не подключен");
+}
+
+async function openSettings() {
+  els.settingsPanel.hidden = false;
+  els.telegramToken.value = "";
+  renderTelegramSettings("Проверяю Telegram…");
+  try {
+    await loadTelegramSettings();
+  } catch (error) {
+    els.telegramStatus.className = "settings-status error";
+    els.telegramStatus.textContent = `Не удалось проверить Telegram: ${error.message}`;
+  }
+}
+
+function closeSettings() {
+  els.settingsPanel.hidden = true;
+}
+
+async function saveTelegramSettings() {
+  els.telegramSave.disabled = true;
+  renderTelegramSettings("Сохраняю токен и перезапускаю Telegram…");
+  try {
+    const data = await api(`/api/agents/${settingsAgentId()}/telegram`, {
+      method: "POST",
+      body: JSON.stringify({ token: els.telegramToken.value.trim() }),
+    });
+    state.telegramSettings = data.settings;
+    renderTelegramSettings(data.restart?.restarted ? "Токен сохранен, Telegram перезапущен" : "Токен сохранен");
+    els.telegramToken.value = "";
+    await refreshSidebar();
+  } catch (error) {
+    els.telegramStatus.className = "settings-status error";
+    els.telegramStatus.textContent = `Не удалось сохранить токен: ${error.message}`;
+  } finally {
+    els.telegramSave.disabled = false;
+  }
 }
 
 async function loadResources() {
@@ -3075,6 +3138,18 @@ els.agentCard.addEventListener("click", (event) => {
   if (event.target === els.agentCard) closeAgentCard();
 });
 
+els.settingsBtn.addEventListener("click", openSettings);
+els.settingsClose.addEventListener("click", closeSettings);
+els.telegramToggle.addEventListener("click", () => {
+  const visible = els.telegramToken.type === "text";
+  els.telegramToken.type = visible ? "password" : "text";
+  els.telegramToggle.textContent = visible ? "Показать" : "Скрыть";
+});
+els.telegramSave.addEventListener("click", saveTelegramSettings);
+els.settingsPanel.addEventListener("click", (event) => {
+  if (event.target === els.settingsPanel) closeSettings();
+});
+
 els.newChatBtn.addEventListener("click", openCreateGroup);
 els.cgBack.addEventListener("click", () => {
   if (state.cgStep === 2) {
@@ -3109,7 +3184,8 @@ els.gcDelete.addEventListener("click", deleteGroupCard);
 
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
-  if (!els.groupCard.hidden) closeGroupCard();
+  if (!els.settingsPanel.hidden) closeSettings();
+  else if (!els.groupCard.hidden) closeGroupCard();
   else if (!els.createGroup.hidden) closeCreateGroup();
   else if (!els.agentCard.hidden) closeAgentCard();
 });

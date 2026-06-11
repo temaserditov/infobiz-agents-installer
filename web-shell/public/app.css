@@ -1861,6 +1861,69 @@ button:disabled {
   border-bottom-color: #40a7e3;
 }
 
+.token-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+  padding: 0 20px;
+}
+
+.token-row .card-label,
+.token-row .card-input {
+  min-width: 0;
+}
+
+.settings-status {
+  margin: 2px 20px 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.settings-status.ok {
+  border-color: #bfdfce;
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.settings-status.error {
+  border-color: #f0c1bd;
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+#settingsPanel .card-label {
+  margin-left: 20px;
+  margin-right: 20px;
+}
+
+.settings-save {
+  width: calc(100% - 40px);
+  min-height: 42px;
+  margin: 14px 20px 0;
+  border: 1px solid #2f95cf;
+  border-radius: 8px;
+  background: #40a7e3;
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.settings-save:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.settings-hint {
+  margin: 10px 20px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .profile-section {
   padding: 8px 0 18px;
 }
