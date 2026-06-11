@@ -56,6 +56,8 @@ do
 done
 
 say_step "Removing installed app, bundled Node, bundled Python, logs, and config"
+remove_path "/Applications/Infobiz Agents.app"
+remove_path "$HOME/Applications/Infobiz Agents.app"
 remove_path "$INSTALL_ROOT"
 remove_path "$CONFIG_DIR"
 

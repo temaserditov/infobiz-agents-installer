@@ -507,6 +507,70 @@ PLIST
   printf "%s" "$url"
 }
 
+install_web_shell_launcher() {
+  local app_parent app_path executable info_plist
+  app_parent="/Applications"
+  if ! /bin/mkdir -p "$app_parent" >/dev/null 2>&1 || [[ ! -w "$app_parent" ]]; then
+    app_parent="$HOME/Applications"
+    /bin/mkdir -p "$app_parent"
+  fi
+
+  app_path="$app_parent/Infobiz Agents.app"
+  executable="$app_path/Contents/MacOS/open-web-panel"
+  info_plist="$app_path/Contents/Info.plist"
+
+  /bin/rm -rf "$app_path"
+  /bin/mkdir -p "$app_path/Contents/MacOS" "$app_path/Contents/Resources"
+
+  cat > "$info_plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDisplayName</key>
+  <string>Infobiz Agents</string>
+  <key>CFBundleExecutable</key>
+  <string>open-web-panel</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.infobiz.agents.launcher</string>
+  <key>CFBundleName</key>
+  <string>Infobiz Agents</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>$VERSION</string>
+  <key>CFBundleVersion</key>
+  <string>$VERSION</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>11.0</string>
+</dict>
+</plist>
+PLIST
+
+  cat > "$executable" <<'APP'
+#!/bin/zsh
+set -euo pipefail
+
+url_file="$HOME/InfobizAgents/web-shell.url"
+label="com.infobiz.agents.web-shell"
+
+if [[ -f "$url_file" ]]; then
+  url="$(/usr/bin/head -n 1 "$url_file")"
+else
+  url="http://127.0.0.1:8787"
+fi
+
+uid="$(/usr/bin/id -u)"
+/bin/launchctl kickstart -k "gui/$uid/$label" >/dev/null 2>&1 || true
+/usr/bin/open "$url"
+APP
+
+  /bin/chmod +x "$executable"
+  /usr/bin/xattr -dr com.apple.quarantine "$app_path" >/dev/null 2>&1 || true
+  /usr/bin/xattr -dr com.apple.provenance "$app_path" >/dev/null 2>&1 || true
+  printf "%s" "$app_path"
+}
+
 read_token() {
   if [[ -n "${TELEGRAM_BOT_TOKEN:-}" ]]; then
     printf "%s" "$TELEGRAM_BOT_TOKEN"
@@ -624,7 +688,11 @@ run_hermes -p "$AGENT_PROFILE" gateway start >> "$LOG_FILE" 2>&1 || true
 say "Installing local web panel"
 web_shell_url="$(install_web_shell)" || fail "Could not install local web panel"
 
+say "Creating Applications shortcut"
+web_shell_app="$(install_web_shell_launcher)" || fail "Could not create web panel shortcut"
+
 say "Done"
 printf "Installed %s. Send a message to the connected Telegram bot or open the web panel:\n" "$AGENT_NAME"
 printf "%s\n" "$web_shell_url"
+printf "Shortcut: %s\n" "$web_shell_app"
 printf "Log file: %s\n" "$LOG_FILE"

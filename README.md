@@ -11,6 +11,8 @@ does not call the official interactive installer:
   silently from the terminal installer
 - The local web panel is installed into `~/InfobizAgents/web-shell` and started
   as a user LaunchAgent
+- An `Infobiz Agents.app` launcher is created in `/Applications` when possible,
+  otherwise in `~/Applications`
 - Student-facing output: quiet Infobiz steps only
 - Full technical output: `~/InfobizAgents/install.log`
 
