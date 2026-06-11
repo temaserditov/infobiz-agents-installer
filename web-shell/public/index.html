@@ -94,8 +94,24 @@
       </main>
 
       <section id="docsMain" class="docs-main">
-        <iframe id="docsFrame" class="docs-frame" title="Документы" src="about:blank"></iframe>
-        <div id="docsFrameLoading" class="docs-frame-loading">Загружаю документы…</div>
+        <div id="docsEmpty" class="docs-empty">
+          <div class="docs-empty-title">Документов пока нет</div>
+          <div class="docs-empty-sub">Создай первую страницу для конспектов, инструкций и материалов курса.</div>
+          <button id="docsEmptyNew" type="button" class="settings-save">Создать страницу</button>
+        </div>
+        <article id="docsEditor" class="docs-editor" hidden>
+          <div class="doc-head">
+            <input id="docTitle" class="doc-title" type="text" placeholder="Без названия" maxlength="200" />
+            <div class="doc-actions">
+              <button id="docEditToggle" type="button" class="doc-tool-btn">Просмотр</button>
+              <button id="docChild" type="button" class="doc-tool-btn">Дочерняя</button>
+              <button id="docDelete" type="button" class="doc-tool-btn danger">Удалить</button>
+            </div>
+          </div>
+          <div id="docSaveState" class="doc-save-state">сохранено</div>
+          <div id="docView" class="doc-view"></div>
+          <textarea id="docBody" class="doc-body" spellcheck="true" placeholder="Пиши здесь…"></textarea>
+        </article>
       </section>
       </div>
 

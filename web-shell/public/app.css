@@ -2486,46 +2486,6 @@ button:disabled {
 .doc-view table { border-collapse: collapse; margin: 12px 0; }
 .doc-view th, .doc-view td { border: 1px solid var(--line); padding: 6px 10px; font-size: 14px; }
 
-/* ===== Docs (docmost) embed ===== */
-#app.mode-docs {
-  grid-template-columns: 64px 1fr;
-}
-
-#app.mode-docs .brand,
-#app.mode-docs #agents,
-#app.mode-docs #docsTree,
-#app.mode-docs #newChatBtn,
-#app.mode-docs .sidebar-resizer {
-  display: none !important;
-}
-
-#app.mode-docs .side-nav {
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-  margin: 12px auto auto;
-  padding-top: 0;
-  border-top: none;
-}
-
-.docs-main {
-  position: relative;
-  overflow: hidden;
-}
-
-.docs-frame {
-  width: 100%;
-  height: 100%;
-  border: none;
-  display: block;
-}
-
-.docs-frame-loading {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  background: var(--surface);
-  color: var(--muted);
-  font-size: 14px;
+#app.mode-docs .agent-sidebar {
+  background: rgba(255, 255, 255, 0.94);
 }

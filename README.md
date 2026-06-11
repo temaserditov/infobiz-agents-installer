@@ -15,6 +15,8 @@ does not call the official interactive installer:
   otherwise in `~/Applications`
 - Telegram Bot Token is configured in the web panel after install, not in the
   terminal installer
+- The Documents tab is built into the web panel and uses local `docs.json`;
+  it does not require a separate docs server on port 3030
 - VPS installers can provide `WEB_SHELL_PUBLIC_URL` when the panel is exposed
   through a tunnel or public HTTPS endpoint
 - Student-facing output: quiet Infobiz steps only

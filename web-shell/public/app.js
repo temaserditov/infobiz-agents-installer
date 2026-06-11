@@ -167,8 +167,6 @@ const els = {
   docSaveState: document.querySelector("#docSaveState") || nullEl,
   docView: document.querySelector("#docView") || nullEl,
   docBody: document.querySelector("#docBody") || nullEl,
-  docsFrame: document.querySelector("#docsFrame") || nullEl,
-  docsFrameLoading: document.querySelector("#docsFrameLoading") || nullEl,
   messages: document.querySelector("#messages") || nullEl,
   composer: document.querySelector("#composer") || nullEl,
   prompt: document.querySelector("#prompt") || nullEl,
@@ -1892,6 +1890,169 @@ function renderRoutes() {
   `).join("");
 }
 
+async function loadDocs() {
+  const data = await api("/api/docs");
+  state.docs = data.docs || [];
+  if (!state.activeDocId || !state.docs.some((doc) => doc.id === state.activeDocId)) {
+    state.activeDocId = state.docs[0]?.id || null;
+  }
+  renderDocsTree();
+  renderActiveDoc();
+}
+
+function docsChildren(parentId = null) {
+  return state.docs
+    .filter((doc) => (doc.parentId || null) === (parentId || null))
+    .sort((a, b) => (a.order || 0) - (b.order || 0) || String(a.title || "").localeCompare(String(b.title || ""), "ru"));
+}
+
+function renderDocsTree() {
+  if (!state.docs.length) {
+    els.docsTree.innerHTML = '<div class="docs-tree-empty">Пока нет страниц</div>';
+    return;
+  }
+  els.docsTree.innerHTML = docsChildren(null).map((doc) => docTreeRow(doc, 0)).join("");
+  for (const row of els.docsTree.querySelectorAll("[data-doc]")) {
+    row.addEventListener("click", (event) => {
+      if (event.target.closest("[data-add-child]")) return;
+      state.activeDocId = row.dataset.doc;
+      state.docEditing = false;
+      renderDocsTree();
+      renderActiveDoc();
+    });
+  }
+  for (const btn of els.docsTree.querySelectorAll("[data-add-child]")) {
+    btn.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      await createDoc(btn.dataset.addChild);
+    });
+  }
+}
+
+function docTreeRow(doc, level) {
+  const children = docsChildren(doc.id);
+  const active = doc.id === state.activeDocId ? "active" : "";
+  return `
+    <div class="docs-row ${active}" data-doc="${escapeHtml(doc.id)}" style="padding-left:${8 + level * 16}px">
+      <span class="dr-twist ${children.length ? "" : "empty"}">›</span>
+      <span class="dr-icon">${escapeHtml(doc.icon || "·")}</span>
+      <span class="dr-title">${escapeHtml(doc.title || "Без названия")}</span>
+      <button class="dr-add" type="button" data-add-child="${escapeHtml(doc.id)}" title="Дочерняя страница">+</button>
+    </div>
+    ${children.map((child) => docTreeRow(child, level + 1)).join("")}
+  `;
+}
+
+function activeDoc() {
+  return state.docs.find((doc) => doc.id === state.activeDocId) || null;
+}
+
+function renderActiveDoc() {
+  const doc = activeDoc();
+  els.docsEmpty.hidden = Boolean(doc);
+  els.docsEditor.hidden = !doc;
+  if (!doc) return;
+  els.docTitle.value = doc.title || "";
+  els.docBody.value = doc.content || "";
+  els.docView.innerHTML = renderMarkdown(doc.content || "");
+  els.docBody.hidden = !state.docEditing;
+  els.docView.hidden = state.docEditing;
+  els.docEditToggle.textContent = state.docEditing ? "Просмотр" : "Редактировать";
+  els.docSaveState.textContent = "сохранено";
+}
+
+function renderMarkdown(text) {
+  const lines = String(text || "").split(/\r?\n/);
+  const html = [];
+  let listOpen = false;
+  const closeList = () => {
+    if (listOpen) {
+      html.push("</ul>");
+      listOpen = false;
+    }
+  };
+  for (const line of lines) {
+    if (/^\s*-\s+/.test(line)) {
+      if (!listOpen) {
+        html.push("<ul>");
+        listOpen = true;
+      }
+      html.push(`<li>${inlineMarkdown(line.replace(/^\s*-\s+/, ""))}</li>`);
+      continue;
+    }
+    closeList();
+    if (!line.trim()) {
+      html.push("");
+    } else if (line.startsWith("### ")) {
+      html.push(`<h3>${inlineMarkdown(line.slice(4))}</h3>`);
+    } else if (line.startsWith("## ")) {
+      html.push(`<h2>${inlineMarkdown(line.slice(3))}</h2>`);
+    } else if (line.startsWith("# ")) {
+      html.push(`<h1>${inlineMarkdown(line.slice(2))}</h1>`);
+    } else {
+      html.push(`<p>${inlineMarkdown(line)}</p>`);
+    }
+  }
+  closeList();
+  return html.join("\n");
+}
+
+function inlineMarkdown(text) {
+  return escapeHtml(text)
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/`([^`]+)`/g, "<code>$1</code>");
+}
+
+async function createDoc(parentId = null) {
+  const data = await api("/api/docs", {
+    method: "POST",
+    body: JSON.stringify({ title: "Новая страница", parentId, content: "" }),
+  });
+  state.docs.push(data.doc);
+  state.activeDocId = data.doc.id;
+  state.docEditing = true;
+  renderDocsTree();
+  renderActiveDoc();
+  els.docTitle.focus();
+  els.docTitle.select();
+}
+
+let docSaveTimer = null;
+function scheduleDocSave() {
+  const doc = activeDoc();
+  if (!doc) return;
+  doc.title = els.docTitle.value.trim() || "Без названия";
+  doc.content = els.docBody.value;
+  els.docSaveState.textContent = "сохраняю…";
+  clearTimeout(docSaveTimer);
+  docSaveTimer = setTimeout(saveActiveDoc, 450);
+}
+
+async function saveActiveDoc() {
+  const doc = activeDoc();
+  if (!doc) return;
+  try {
+    const data = await api(`/api/docs/${doc.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ title: doc.title, content: doc.content }),
+    });
+    Object.assign(doc, data.doc);
+    els.docSaveState.textContent = "сохранено";
+    renderDocsTree();
+    if (!state.docEditing) els.docView.innerHTML = renderMarkdown(doc.content || "");
+  } catch (error) {
+    els.docSaveState.textContent = `ошибка: ${error.message}`;
+  }
+}
+
+async function deleteActiveDoc() {
+  const doc = activeDoc();
+  if (!doc) return;
+  if (!window.confirm(`Удалить «${doc.title || "Без названия"}» и дочерние страницы?`)) return;
+  await api(`/api/docs/${doc.id}`, { method: "DELETE" });
+  await loadDocs();
+}
+
 function renderSnapshots() {
   if (!state.snapshots.length) {
     els.snapshots.className = "snapshots-list empty";
@@ -3220,17 +3381,6 @@ els.prompt.addEventListener("keydown", (event) => {
   }
 });
 
-const DOCS_URL = "http://localhost:3030";
-
-function loadDocsFrame() {
-  if (els.docsFrame.dataset.loaded) return;
-  els.docsFrame.dataset.loaded = "1";
-  els.docsFrame.addEventListener("load", () => {
-    els.docsFrameLoading.hidden = true;
-  });
-  els.docsFrame.src = DOCS_URL;
-}
-
 function setView(view) {
   state.view = view;
   els.app.classList.toggle("mode-docs", view === "docs");
@@ -3238,12 +3388,25 @@ function setView(view) {
   for (const item of document.querySelectorAll(".side-nav-item")) {
     item.classList.toggle("active", item.dataset.view === view);
   }
-  if (view === "docs") loadDocsFrame();
+  if (view === "docs") loadDocs().catch((error) => addMessage("assistant", `Не удалось загрузить документы: ${error.message}`, "error"));
 }
 
 for (const item of document.querySelectorAll(".side-nav-item")) {
   item.addEventListener("click", () => setView(item.dataset.view));
 }
+
+els.newDocBtn.addEventListener("click", () => createDoc().catch((error) => addMessage("assistant", `Не удалось создать страницу: ${error.message}`, "error")));
+els.docsEmptyNew.addEventListener("click", () => createDoc().catch((error) => addMessage("assistant", `Не удалось создать страницу: ${error.message}`, "error")));
+els.docChild.addEventListener("click", () => createDoc(state.activeDocId).catch((error) => addMessage("assistant", `Не удалось создать страницу: ${error.message}`, "error")));
+els.docDelete.addEventListener("click", () => deleteActiveDoc().catch((error) => addMessage("assistant", `Не удалось удалить страницу: ${error.message}`, "error")));
+els.docEditToggle.addEventListener("click", () => {
+  state.docEditing = !state.docEditing;
+  renderActiveDoc();
+  if (state.docEditing) els.docBody.focus();
+});
+els.docTitle.addEventListener("input", scheduleDocSave);
+els.docBody.addEventListener("input", scheduleDocSave);
+
 async function refreshSidebar() {
   try {
     const [groupsData, agentsData] = await Promise.all([api("/api/groups"), api("/api/agents")]);
