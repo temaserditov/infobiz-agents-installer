@@ -432,6 +432,9 @@ install_web_shell() {
   /bin/rm -rf "$workdir"
   /usr/bin/xattr -dr com.apple.quarantine "$WEB_SHELL_ROOT" >/dev/null 2>&1 || true
   /usr/bin/xattr -dr com.apple.provenance "$WEB_SHELL_ROOT" >/dev/null 2>&1 || true
+  if [[ -f "$WEB_SHELL_ROOT/server.mjs" ]]; then
+    /usr/bin/perl -0pi -e 's#join\(HERMES_AGENT_ROOT, "venv", "bin", "python3"\)#join(HERMES_AGENT_ROOT, "venv", "bin", "python")#g' "$WEB_SHELL_ROOT/server.mjs"
+  fi
 
   if [[ -x "$HERMES_ROOT/node/bin/node" ]]; then
     node_cmd="$HERMES_ROOT/node/bin/node"
