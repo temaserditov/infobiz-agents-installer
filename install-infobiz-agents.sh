@@ -19,6 +19,9 @@ VERSION="${VERSION:-0.1.0}"
 BASE_URL="${BASE_URL:-}"
 PROFILE_URL="${PROFILE_URL:-}"
 PROFILE_TARBALL="${PROFILE_TARBALL:-}"
+WEB_SHELL_URL="${WEB_SHELL_URL:-}"
+WEB_SHELL_TARBALL="${WEB_SHELL_TARBALL:-}"
+WEB_SHELL_PORT="${WEB_SHELL_PORT:-8787}"
 HERMES_BRANCH="${HERMES_BRANCH:-main}"
 HERMES_SOURCE_URL="${HERMES_SOURCE_URL:-https://github.com/NousResearch/hermes-agent/archive/refs/heads/$HERMES_BRANCH.tar.gz}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.11}"
@@ -36,6 +39,7 @@ CONFIG_DIR="$HOME/.infobiz-agents"
 HERMES_ROOT="$HOME/.hermes"
 HERMES_AGENT_ROOT="$HERMES_ROOT/hermes-agent"
 PROFILE_ROOT="$HERMES_ROOT/profiles/$AGENT_PROFILE"
+WEB_SHELL_ROOT="$INSTALL_ROOT/web-shell"
 LOG_FILE="$INSTALL_ROOT/install.log"
 HERMES_CMD="$HERMES_AGENT_ROOT/venv/bin/hermes"
 UV_CMD=""
@@ -388,6 +392,121 @@ need_profile_payload() {
   printf "%s" "$downloaded"
 }
 
+need_web_shell_payload() {
+  if [[ -n "$WEB_SHELL_TARBALL" && -f "$WEB_SHELL_TARBALL" ]]; then
+    printf "%s" "$WEB_SHELL_TARBALL"
+    return 0
+  fi
+  if [[ -z "$WEB_SHELL_URL" && -n "$BASE_URL" ]]; then
+    WEB_SHELL_URL="$BASE_URL/agent-web-shell-$VERSION.tar.gz"
+  fi
+  [[ -n "$WEB_SHELL_URL" ]] || fail "WEB_SHELL_URL or BASE_URL is not set."
+  local downloaded="$TMPDIR/agent-web-shell.tar.gz"
+  download_file "$WEB_SHELL_URL" "$downloaded"
+  printf "%s" "$downloaded"
+}
+
+choose_web_shell_port() {
+  local port="$WEB_SHELL_PORT"
+  local max=$((port + 50))
+  while (( port <= max )); do
+    if ! /usr/sbin/lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+      printf "%s" "$port"
+      return 0
+    fi
+    port=$((port + 1))
+  done
+  fail "Could not find a free local port for the agent web panel"
+}
+
+install_web_shell() {
+  local payload workdir node_cmd port plist label uid url
+  payload="$(need_web_shell_payload)"
+  workdir="$(mktemp -d "${TMPDIR:-/tmp}/infobiz-web-shell.XXXXXX")"
+  /usr/bin/tar -xzf "$payload" -C "$workdir" || return 1
+  [[ -d "$workdir/web-shell" ]] || return 1
+
+  /bin/rm -rf "$WEB_SHELL_ROOT"
+  /bin/mkdir -p "$INSTALL_ROOT"
+  /usr/bin/ditto "$workdir/web-shell" "$WEB_SHELL_ROOT"
+  /bin/rm -rf "$workdir"
+  /usr/bin/xattr -dr com.apple.quarantine "$WEB_SHELL_ROOT" >/dev/null 2>&1 || true
+  /usr/bin/xattr -dr com.apple.provenance "$WEB_SHELL_ROOT" >/dev/null 2>&1 || true
+
+  if [[ -x "$HERMES_ROOT/node/bin/node" ]]; then
+    node_cmd="$HERMES_ROOT/node/bin/node"
+  elif command -v node >/dev/null 2>&1; then
+    node_cmd="$(command -v node)"
+  else
+    return 1
+  fi
+
+  port="$(choose_web_shell_port)"
+  url="http://127.0.0.1:$port"
+  printf "%s\n" "$url" > "$INSTALL_ROOT/web-shell.url"
+
+  label="com.infobiz.agents.web-shell"
+  uid="$(/usr/bin/id -u)"
+  plist="$HOME/Library/LaunchAgents/$label.plist"
+  /bin/mkdir -p "$HOME/Library/LaunchAgents"
+  /bin/launchctl bootout "gui/$uid" "$plist" >/dev/null 2>&1 || true
+  /bin/launchctl remove "$label" >/dev/null 2>&1 || true
+
+  cat > "$plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$label</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$node_cmd</string>
+    <string>$WEB_SHELL_ROOT/server.mjs</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>$WEB_SHELL_ROOT</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PORT</key>
+    <string>$port</string>
+    <key>HERMES_ROOT</key>
+    <string>$HERMES_ROOT</string>
+    <key>HERMES_AGENT_ROOT</key>
+    <string>$HERMES_AGENT_ROOT</string>
+    <key>HERMES_PYTHON</key>
+    <string>$HERMES_AGENT_ROOT/venv/bin/python3</string>
+    <key>HERMES_WORKSPACES_ROOT</key>
+    <string>$HOME/.hermes-workspaces</string>
+    <key>AGENT_WORKSPACE</key>
+    <string>$INSTALL_ROOT/workspace</string>
+    <key>OBSIDIAN_VAULT</key>
+    <string>$INSTALL_ROOT/obsidian-vault</string>
+    <key>AGENT_PROFILE_ALLOW</key>
+    <string>$AGENT_PROFILE</string>
+    <key>PATH</key>
+    <string>$SHIM_DIR:$HERMES_ROOT/node/bin:$HERMES_AGENT_ROOT/venv/bin:$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>$INSTALL_ROOT/web-shell.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>$INSTALL_ROOT/web-shell.err.log</string>
+</dict>
+</plist>
+PLIST
+
+  /bin/launchctl bootstrap "gui/$uid" "$plist" >/dev/null 2>&1 || /bin/launchctl load "$plist" >/dev/null 2>&1 || return 1
+  /bin/launchctl kickstart -k "gui/$uid/$label" >/dev/null 2>&1 || true
+  if [[ -x /usr/bin/open && "${INFOBIZ_OPEN_WEB_PANEL:-1}" = "1" ]]; then
+    /usr/bin/open "$url" >/dev/null 2>&1 || true
+  fi
+  printf "%s" "$url"
+}
+
 read_token() {
   if [[ -n "${TELEGRAM_BOT_TOKEN:-}" ]]; then
     printf "%s" "$TELEGRAM_BOT_TOKEN"
@@ -502,6 +621,10 @@ run_hermes -p "$AGENT_PROFILE" gateway install --force >> "$LOG_FILE" 2>&1 || tr
 say "Starting Hermes gateway"
 run_hermes -p "$AGENT_PROFILE" gateway start >> "$LOG_FILE" 2>&1 || true
 
+say "Installing local web panel"
+web_shell_url="$(install_web_shell)" || fail "Could not install local web panel"
+
 say "Done"
-printf "Installed %s. Send a message to the connected Telegram bot.\n" "$AGENT_NAME"
+printf "Installed %s. Send a message to the connected Telegram bot or open the web panel:\n" "$AGENT_NAME"
+printf "%s\n" "$web_shell_url"
 printf "Log file: %s\n" "$LOG_FILE"

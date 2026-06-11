@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agent Shell Design Variants</title>
+    <link rel="stylesheet" href="/design-variants.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="topbar">
+        <a class="brand" href="/">
+          <div class="brand-mark">H</div>
+          <div>
+            <div class="brand-title">Agent Shell</div>
+            <div class="brand-subtitle">5 вариантов интерфейса</div>
+          </div>
+        </a>
+        <div class="top-actions">
+          <a class="link-button" href="/">Открыть текущую панель</a>
+        </div>
+      </header>
+
+      <section class="intro">
+        <div>
+          <h1>Пять направлений для веб-оболочки агентов</h1>
+          <p>
+            Все варианты заточены под рабочую платформу: быстрый чат с агентами,
+            видимость gateway/session/tool-state, approvals без Telegram и будущий перенос в Mac/iOS.
+          </p>
+        </div>
+        <div class="criteria">
+          <div class="criterion"><span class="dot"></span><span>Плотная рабочая поверхность без лендингового шума</span></div>
+          <div class="criterion"><span class="dot"></span><span>Контроль состояния агентов виден в первом экране</span></div>
+          <div class="criterion"><span class="dot"></span><span>Чат, диагностика и approvals живут рядом, а не в разных мирах</span></div>
+        </div>
+      </section>
+
+      <main class="variants">
+        <article class="variant ops">
+          <header class="variant-head">
+            <div class="number">01</div>
+            <div>
+              <h2>Operator Console</h2>
+              <div class="variant-desc">Строгая инженерная консоль: максимум ясности, минимум декоративности.</div>
+            </div>
+            <div class="best-for">Лучше всего для ежедневной работы, диагностики, быстрых фиксов</div>
+          </header>
+          <section class="mock">
+            <aside class="mock-rail">
+              <div class="mock-title">Agents</div>
+              <div class="agent-row active"><div class="avatar">К</div><div><span class="name">Координатор</span><span class="meta">ready · 9k ctx</span></div><span class="pill">ok</span></div>
+              <div class="agent-row"><div class="avatar">Т</div><div><span class="name">Технарь</span><span class="meta">ready · shell</span></div><span class="pill">ok</span></div>
+              <div class="agent-row"><div class="avatar">Д</div><div><span class="name">Дизайнер</span><span class="meta">deferred tools</span></div><span class="pill">idle</span></div>
+              <div class="agent-row"><div class="avatar">П</div><div><span class="name">Продажник</span><span class="meta">clean session</span></div><span class="pill">ok</span></div>
+            </aside>
+            <section class="mock-main">
+              <div class="mock-toolbar">
+                <div class="tabs"><div class="tab">Chat</div><div class="tab">Preflight</div><div class="tab">Runs</div></div>
+                <div class="actions"><div class="icon">R</div><div class="icon">S</div><div class="icon">X</div></div>
+              </div>
+              <div class="message-stack">
+                <div class="bubble user"><strong>Ты</strong><p>Проверь, почему агент долго думает, без перезапуска.</p></div>
+                <div class="bubble"><strong>Технарь</strong><p>Gateway живой. Сессия 50% лимита. Свежих timeout в логах нет.</p></div>
+                <div class="bubble"><strong>System</strong><p>Preflight: no browser, no legacy, no bloated sessions.</p></div>
+              </div>
+              <div class="composer-preview"><div class="input-line"></div><div class="send-chip">Send</div></div>
+            </section>
+            <aside class="mock-side">
+              <div class="mock-title">Control Center</div>
+              <div class="metric-row"><strong>9/9 gateways</strong><span>pidfiles match launchctl</span></div>
+              <div class="metric-row"><strong>0 next fixes</strong><span>nothing burning</span></div>
+              <div class="metric-row"><strong>0 bloated</strong><span>guard limit 20k</span></div>
+              <div class="metric-row"><strong>0 fresh logs</strong><span>since restart</span></div>
+            </aside>
+          </section>
+          <footer class="notes">
+            <div class="note"><strong>Плюс</strong><span>Самый надежный и быстрый для реальной эксплуатации.</span></div>
+            <div class="note"><strong>Риск</strong><span>Может ощущаться суховато, если хочется больше “личного кабинета”.</span></div>
+          </footer>
+        </article>
+
+        <article class="variant mission">
+          <header class="variant-head">
+            <div class="number">02</div>
+            <div>
+              <h2>Mission Control</h2>
+              <div class="variant-desc">Командный центр: сначала статус системы, потом чат и конкретные действия.</div>
+            </div>
+            <div class="best-for">Лучше всего для контроля всей команды агентов одним взглядом</div>
+          </header>
+          <section class="mock">
+            <aside class="mock-rail">
+              <div class="mock-title">Runtime Map</div>
+              <div class="task-row active"><strong>Gateway Runtime</strong><span>9/9 pidfiles match</span></div>
+              <div class="task-row"><strong>Session Guard</strong><span>sourceOk · testOk</span></div>
+              <div class="task-row"><strong>Lite Router</strong><span>zero-tool simple turns</span></div>
+              <div class="task-row"><strong>Archive Isolation</strong><span>14 items isolated</span></div>
+            </aside>
+            <section class="mock-main">
+              <div class="mock-toolbar">
+                <div class="tabs"><div class="tab">Overview</div><div class="tab">Agents</div><div class="tab">Logs</div></div>
+                <div class="actions"><div class="icon">F</div><div class="icon">T</div></div>
+              </div>
+              <div class="message-stack">
+                <div class="bubble"><strong>Current Mission</strong><p>Replace Telegram dependency with local web control surface.</p></div>
+                <div class="bubble user"><strong>Manual Gate</strong><p>Real Telegram canary tests require operator approval.</p></div>
+                <div class="bubble"><strong>Next Safe Move</strong><p>Package shell as launchd service, then move to app shell.</p></div>
+              </div>
+              <div class="composer-preview"><div class="input-line"></div><div class="send-chip">Run</div></div>
+            </section>
+            <aside class="mock-side">
+              <div class="mock-title">Priority</div>
+              <div class="metric-row"><strong>P0 clear</strong><span>no high fixes</span></div>
+              <div class="metric-row"><strong>P1 service</strong><span>keep shell alive</span></div>
+              <div class="metric-row"><strong>P2 canary</strong><span>needs real messages</span></div>
+            </aside>
+          </section>
+          <footer class="notes">
+            <div class="note"><strong>Плюс</strong><span>Дает ощущение “пульта управления”, а не просто чата.</span></div>
+            <div class="note"><strong>Риск</strong><span>Чат становится вторым слоем, не всем задачам это удобно.</span></div>
+          </footer>
+        </article>
+
+        <article class="variant inbox">
+          <header class="variant-head">
+            <div class="number">03</div>
+            <div>
+              <h2>Agent Inbox</h2>
+              <div class="variant-desc">Интерфейс как почтовый клиент: каждая задача это тред с владельцем и состоянием.</div>
+            </div>
+            <div class="best-for">Лучше всего для параллельных задач, approvals и истории решений</div>
+          </header>
+          <section class="mock">
+            <aside class="mock-rail">
+              <div class="mock-title">Threads</div>
+              <div class="thread-row active"><strong>Технарь · STT timeout</strong><span>resolved · no fresh logs</span></div>
+              <div class="thread-row"><strong>Дизайнер · image tools</strong><span>deferred · separate review</span></div>
+              <div class="thread-row"><strong>Продажник · approval</strong><span>fixed · no curl prompt</span></div>
+              <div class="thread-row"><strong>Gateway guard</strong><span>tested · 14 passed</span></div>
+            </aside>
+            <section class="mock-main">
+              <div class="mock-toolbar">
+                <div class="tabs"><div class="tab">Thread</div><div class="tab">Files</div><div class="tab">Timeline</div></div>
+                <div class="actions"><div class="icon">A</div><div class="icon">P</div></div>
+              </div>
+              <div class="message-stack">
+                <div class="bubble"><strong>System</strong><p>Regression tests attached: session guard, lite router, runtime check.</p></div>
+                <div class="bubble user"><strong>Ты</strong><p>Продолжай работу, но не трогай дизайнера пока.</p></div>
+                <div class="bubble"><strong>Codex</strong><p>Done. Designer marked deferred, global audit remains green.</p></div>
+              </div>
+              <div class="composer-preview"><div class="input-line"></div><div class="send-chip">Reply</div></div>
+            </section>
+            <aside class="mock-side">
+              <div class="mock-title">Thread Facts</div>
+              <div class="metric-row"><strong>Owner</strong><span>coordinator</span></div>
+              <div class="metric-row"><strong>Mode</strong><span>focused</span></div>
+              <div class="metric-row"><strong>Risk</strong><span>no browser · no legacy</span></div>
+              <div class="metric-row"><strong>Artifacts</strong><span>tests · snapshots · logs</span></div>
+            </aside>
+          </section>
+          <footer class="notes">
+            <div class="note"><strong>Плюс</strong><span>Лучше всего масштабируется в Mac/iOS, потому что треды естественны.</span></div>
+            <div class="note"><strong>Риск</strong><span>Менее “операторский” на первом экране, если надо чинить срочный инцидент.</span></div>
+          </footer>
+        </article>
+
+        <article class="variant studio">
+          <header class="variant-head">
+            <div class="number">04</div>
+            <div>
+              <h2>Agent Studio</h2>
+              <div class="variant-desc">Рабочая студия для задач с ассетами: дизайнер, продакшн, Obsidian, Notion и генераторы.</div>
+            </div>
+            <div class="best-for">Лучше всего для дизайнера, медиа-задач и визуальных пайплайнов</div>
+          </header>
+          <section class="mock">
+            <aside class="mock-rail">
+              <div class="mock-title">Tool Palette</div>
+              <div class="tool-row active"><strong>Image Providers</strong><span>Laozhang · Nano Banana</span></div>
+              <div class="tool-row"><strong>Workspace</strong><span>Obsidian · Notion</span></div>
+              <div class="tool-row"><strong>Motion</strong><span>Remotion · Video Gen</span></div>
+              <div class="tool-row"><strong>Guard</strong><span>preflight before tools</span></div>
+            </aside>
+            <section class="mock-main">
+              <div class="mock-toolbar">
+                <div class="tabs"><div class="tab">Prompt</div><div class="tab">Assets</div><div class="tab">Review</div></div>
+                <div class="actions"><div class="icon">I</div><div class="icon">V</div></div>
+              </div>
+              <div class="message-stack">
+                <div class="bubble user"><strong>Ты</strong><p>Собери cover concept, но картинку пока не генерируй.</p></div>
+                <div class="bubble"><strong>Дизайнер</strong><p>Concept only. No provider call. Three directions ready for review.</p></div>
+                <div class="bubble"><strong>Preflight</strong><p>Media generation blocked until explicit generate command.</p></div>
+              </div>
+              <div class="composer-preview"><div class="input-line"></div><div class="send-chip">Create</div></div>
+            </section>
+            <aside class="mock-side">
+              <div class="mock-title">Asset State</div>
+              <div class="metric-row"><strong>Prompt</strong><span>draft ready</span></div>
+              <div class="metric-row"><strong>Provider</strong><span>not called</span></div>
+              <div class="metric-row"><strong>Cost</strong><span>0 requests</span></div>
+              <div class="metric-row"><strong>Next</strong><span>approve generation</span></div>
+            </aside>
+          </section>
+          <footer class="notes">
+            <div class="note"><strong>Плюс</strong><span>Лучший вариант для дизайнера и медиа, где важны ассеты и approvals.</span></div>
+            <div class="note"><strong>Риск</strong><span>Для технаря и координатора может быть слишком “студийным”.</span></div>
+          </footer>
+        </article>
+
+        <article class="variant board">
+          <header class="variant-head">
+            <div class="number">05</div>
+            <div>
+              <h2>Triage Board</h2>
+              <div class="variant-desc">Доска здоровья системы: каждая проблема становится понятной карточкой действия.</div>
+            </div>
+            <div class="best-for">Лучше всего для режима “почему опять тупит и что чинить первым”</div>
+          </header>
+          <section class="mock">
+            <aside class="mock-rail">
+              <div class="mock-title">Queues</div>
+              <div class="agent-row active"><div class="avatar">F</div><div><span class="name">Fix Now</span><span class="meta">0 high</span></div><span class="pill">0</span></div>
+              <div class="agent-row"><div class="avatar">W</div><div><span class="name">Watch</span><span class="meta">4 active sessions</span></div><span class="pill">4</span></div>
+              <div class="agent-row"><div class="avatar">T</div><div><span class="name">Tests</span><span class="meta">14 regression</span></div><span class="pill">ok</span></div>
+            </aside>
+            <section class="mock-main">
+              <div class="mock-toolbar">
+                <div class="tabs"><div class="tab">Today</div><div class="tab">Agents</div><div class="tab">Guards</div></div>
+                <div class="actions"><div class="icon">Q</div><div class="icon">C</div></div>
+              </div>
+              <div class="message-stack">
+                <div class="task-row active"><strong>No high-priority fixes</strong><span>audit, runtime, baseline, logs all green</span></div>
+                <div class="task-row"><strong>Make shell persistent</strong><span>launchd service for :8787</span></div>
+                <div class="task-row"><strong>Run live canaries</strong><span>requires real agent messages</span></div>
+                <div class="task-row"><strong>Designer deep dive</strong><span>separate media-tool review</span></div>
+              </div>
+              <div class="composer-preview"><div class="input-line"></div><div class="send-chip">Assign</div></div>
+            </section>
+            <aside class="mock-side">
+              <div class="mock-title">System Score</div>
+              <div class="metric-row"><strong>Ready</strong><span>9 agents</span></div>
+              <div class="metric-row"><strong>Warnings</strong><span>0 active</span></div>
+              <div class="metric-row"><strong>Drift</strong><span>0 changes</span></div>
+              <div class="metric-row"><strong>Smoke</strong><span>all routes ok</span></div>
+            </aside>
+          </section>
+          <footer class="notes">
+            <div class="note"><strong>Плюс</strong><span>Самый понятный для управления поломками и очередью улучшений.</span></div>
+            <div class="note"><strong>Риск</strong><span>Чатовая часть менее центральная, чем в обычном messenger-style UI.</span></div>
+          </footer>
+        </article>
+      </main>
+    </div>
+  </body>
+</html>

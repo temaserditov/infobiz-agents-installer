@@ -1,0 +1,12 @@
+{
+  "name": "agent-web-shell",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node server.mjs",
+    "check": "node --check server.mjs && node --check public/app.js && node --check scripts/smoke.mjs && python3 -m py_compile runner.py",
+    "smoke": "node scripts/smoke.mjs"
+  }
+}

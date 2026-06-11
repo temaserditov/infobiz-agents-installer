@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Агенты Сердитова</title>
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <div id="app">
+      <aside class="agent-sidebar">
+        <div class="brand">
+          <div>
+            <div id="brandTitle" class="brand-title">Агенты Сердитова</div>
+            <div id="brandSubtitle" class="brand-subtitle">локальная панель без Telegram</div>
+          </div>
+          <div class="brand-actions">
+            <button id="newChatBtn" class="icon-button" title="Создать чат" aria-label="Создать чат">
+              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M5 4h6.5a1 1 0 0 1 0 2H6v12h12v-5.5a1 1 0 0 1 2 0V19a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/><path fill="currentColor" d="M20.5 3.5a2.1 2.1 0 0 1 0 3l-7.3 7.3-3.4.8.8-3.4 7.3-7.3a2.1 2.1 0 0 1 2.6-.4z"/></svg>
+            </button>
+            <button id="newDocBtn" class="icon-button" title="Новая страница" aria-label="Новая страница" hidden>
+              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 5a1 1 0 0 1 1 1v5h5a1 1 0 0 1 0 2h-5v5a1 1 0 0 1-2 0v-5H6a1 1 0 0 1 0-2h5V6a1 1 0 0 1 1-1z"/></svg>
+            </button>
+          </div>
+        </div>
+        <div id="agents" class="agents"></div>
+        <div id="docsTree" class="docs-tree" hidden></div>
+        <nav class="side-nav" aria-label="Разделы">
+          <button class="side-nav-item active" data-view="chats" title="Чаты" aria-label="Чаты">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M4 4h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-5 4v-4H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/></svg>
+          </button>
+          <button class="side-nav-item" data-view="docs" title="Документы" aria-label="Документы">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M7 2h7l5 5v13a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm6 1.5V8h4.5L13 3.5zM8 12h8v1.6H8zm0 3.4h8V17H8zm0-6.8h4v1.6H8z"/></svg>
+          </button>
+        </nav>
+        <div id="sidebarResizer" class="sidebar-resizer" title="Потяни, чтобы изменить ширину"></div>
+      </aside>
+
+      <div class="main-col">
+      <main class="chat-shell">
+        <header class="topbar">
+          <div id="chatHead" class="chat-head" role="button" tabindex="0" title="Профиль агента">
+            <div id="activeAvatar" class="chat-head-avatar"></div>
+            <div class="chat-head-text">
+              <div id="activeName" class="active-name">Координатор</div>
+              <div id="activeMeta" class="active-meta">в сети</div>
+            </div>
+          </div>
+        </header>
+
+        <section class="conversation">
+          <div id="messages" class="messages"></div>
+          <form id="composer" class="composer">
+            <div id="mentionPopup" class="mention-popup" hidden></div>
+            <div id="attachPreview" class="attach-preview" hidden></div>
+            <div id="composerRow" class="composer-row">
+              <div id="ctxGauge" class="ctx-gauge" tabindex="0" aria-label="Загрузка контекста">
+                <svg viewBox="0 0 36 36" width="30" height="30" aria-hidden="true">
+                  <circle class="ctx-track" cx="18" cy="18" r="15.5" fill="none" stroke-width="3"></circle>
+                  <circle id="ctxArc" class="ctx-arc" cx="18" cy="18" r="15.5" fill="none" stroke-width="3" stroke-linecap="round" transform="rotate(-90 18 18)"></circle>
+                </svg>
+                <div id="ctxTip" class="ctx-tip"></div>
+              </div>
+              <input id="fileInput" type="file" multiple hidden />
+              <button id="attachBtn" type="button" class="composer-icon-btn" aria-label="Прикрепить файл" title="Прикрепить файл">
+                <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M16.5 6v11.5a4 4 0 11-8 0V5a2.5 2.5 0 015 0v10.5a1 1 0 11-2 0V6H10v9.5a2.5 2.5 0 005 0V5a4 4 0 10-8 0v12.5a5.5 5.5 0 0011 0V6h-1.5z"/></svg>
+              </button>
+              <div class="composer-input">
+                <textarea id="prompt" rows="1" placeholder="Сообщение"></textarea>
+              </div>
+              <button id="micBtn" type="button" class="composer-icon-btn" aria-label="Голосовое сообщение" title="Голосовое сообщение">
+                <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M12 14a3 3 0 003-3V6a3 3 0 00-6 0v5a3 3 0 003 3zm5-3a5 5 0 01-10 0H5a7 7 0 006 6.92V21h2v-3.08A7 7 0 0019 11h-2z"/></svg>
+              </button>
+              <button id="send" type="submit" class="send-btn" aria-label="Отправить" title="Отправить" hidden>
+                <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M3.4 20.4l17.45-7.48a1 1 0 000-1.84L3.4 3.6a.993.993 0 00-1.39.91L2 9.12c0 .5.37.93.87.99L17 12 2.87 13.88c-.5.07-.87.5-.87 1l.01 4.61c0 .71.73 1.2 1.39.91z"/></svg>
+              </button>
+            </div>
+            <div id="recordBar" class="record-bar" hidden>
+              <button id="recordCancel" type="button" class="rec-cancel" aria-label="Отмена записи" title="Отмена">
+                <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M6 7h12l-1 13a2 2 0 01-2 2H9a2 2 0 01-2-2L6 7zm3-3h6l1 2H8l1-2z"/></svg>
+              </button>
+              <span class="rec-dot"></span>
+              <span id="recordTime" class="rec-time">0:00</span>
+              <span class="rec-hint">идёт запись…</span>
+              <button id="recordSend" type="button" class="rec-send" aria-label="Отправить голосовое" title="Отправить">
+                <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M3.4 20.4l17.45-7.48a1 1 0 000-1.84L3.4 3.6a.993.993 0 00-1.39.91L2 9.12c0 .5.37.93.87.99L17 12 2.87 13.88c-.5.07-.87.5-.87 1l.01 4.61c0 .71.73 1.2 1.39.91z"/></svg>
+              </button>
+            </div>
+          </form>
+        </section>
+      </main>
+
+      <section id="docsMain" class="docs-main">
+        <iframe id="docsFrame" class="docs-frame" title="Документы" src="about:blank"></iframe>
+        <div id="docsFrameLoading" class="docs-frame-loading">Загружаю документы…</div>
+      </section>
+      </div>
+
+    </div>
+
+    <div id="agentCard" class="profile-panel" hidden>
+      <header class="profile-bar">
+        <button id="cardClose" type="button" class="card-icon-btn" aria-label="Назад">
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M15.4 7.4 14 6l-6 6 6 6 1.4-1.4-4.6-4.6z"/></svg>
+        </button>
+        <span id="cardBarTitle" class="profile-bar-title">Профиль</span>
+        <button id="cardEdit" type="button" class="card-text-btn">Изменить</button>
+        <button id="cardCancel" type="button" class="card-text-btn" hidden>Отмена</button>
+        <button id="cardSave" type="button" class="card-text-btn primary" hidden>Сохранить</button>
+      </header>
+      <div class="profile-scroll">
+        <div class="profile-head">
+          <div class="card-photo">
+            <div id="cardAvatar" class="card-avatar"></div>
+            <button id="cardPhotoBtn" type="button" class="card-camera" aria-label="Сменить фото" hidden>
+              <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path fill="currentColor" d="M9 4l-1.5 2H4a2 2 0 00-2 2v10a2 2 0 002 2h16a2 2 0 002-2V8a2 2 0 00-2-2h-3.5L15 4H9zm3 5a4.5 4.5 0 110 9 4.5 4.5 0 010-9zm0 2a2.5 2.5 0 100 5 2.5 2.5 0 000-5z"/></svg>
+            </button>
+            <input id="cardFile" type="file" accept="image/*" hidden />
+          </div>
+          <div id="cardView" class="card-view">
+            <div id="cardName" class="card-name"></div>
+            <div id="cardSub" class="card-sub"></div>
+          </div>
+          <div id="cardForm" class="card-form" hidden>
+            <label class="card-label" for="cardNameInput">Имя</label>
+            <input id="cardNameInput" class="card-input" type="text" maxlength="80" placeholder="Имя агента" />
+          </div>
+        </div>
+        <div id="cardSkillsSection" class="profile-section">
+          <div class="profile-section-title">Скиллы<span id="cardSkillsCount" class="profile-section-count"></span></div>
+          <div id="cardSkillsList" class="skill-list"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="createGroup" class="profile-panel" hidden>
+      <header class="profile-bar">
+        <button id="cgBack" type="button" class="card-icon-btn" aria-label="Назад">
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M15.4 7.4 14 6l-6 6 6 6 1.4-1.4-4.6-4.6z"/></svg>
+        </button>
+        <span id="cgTitle" class="profile-bar-title">Новый чат</span>
+        <button id="cgNext" type="button" class="card-text-btn primary" disabled>Далее</button>
+        <button id="cgCreate" type="button" class="card-text-btn primary" hidden disabled>Создать</button>
+      </header>
+      <div class="profile-scroll">
+        <div id="cgStep1">
+          <div id="cgSelected" class="cg-selected" hidden></div>
+          <div class="profile-section-title">Выбери агентов</div>
+          <div id="cgMembers" class="member-list"></div>
+        </div>
+        <div id="cgStep2" hidden>
+          <div class="profile-head">
+            <div class="card-photo">
+              <div id="cgAvatar" class="card-avatar"></div>
+              <button id="cgPhotoBtn" type="button" class="card-camera" aria-label="Фото чата">
+                <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path fill="currentColor" d="M9 4l-1.5 2H4a2 2 0 00-2 2v10a2 2 0 002 2h16a2 2 0 002-2V8a2 2 0 00-2-2h-3.5L15 4H9zm3 5a4.5 4.5 0 110 9 4.5 4.5 0 010-9zm0 2a2.5 2.5 0 100 5 2.5 2.5 0 000-5z"/></svg>
+              </button>
+              <input id="cgFile" type="file" accept="image/*" hidden />
+            </div>
+            <div class="card-form">
+              <label class="card-label" for="cgName">Название чата</label>
+              <input id="cgName" class="card-input" type="text" maxlength="80" placeholder="Например: Проект «Воронка»" />
+            </div>
+          </div>
+          <div class="profile-section">
+            <div class="profile-section-title">Участники<span id="cgSummaryCount" class="profile-section-count"></span></div>
+            <div id="cgSummary" class="member-list"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="groupCard" class="profile-panel" hidden>
+      <header class="profile-bar">
+        <button id="gcClose" type="button" class="card-icon-btn" aria-label="Назад">
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M15.4 7.4 14 6l-6 6 6 6 1.4-1.4-4.6-4.6z"/></svg>
+        </button>
+        <span class="profile-bar-title">Профиль чата</span>
+        <button id="gcDelete" type="button" class="card-text-btn danger">Удалить</button>
+      </header>
+      <div class="profile-scroll">
+        <div class="profile-head">
+          <div class="card-photo">
+            <div id="gcAvatar" class="card-avatar"></div>
+          </div>
+          <div class="card-view">
+            <div id="gcName" class="card-name"></div>
+            <div id="gcSub" class="card-sub"></div>
+          </div>
+        </div>
+        <div class="profile-section">
+          <div class="profile-section-title">Участники<span id="gcCount" class="profile-section-count"></span></div>
+          <div id="gcMembers" class="member-list"></div>
+        </div>
+      </div>
+    </div>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
