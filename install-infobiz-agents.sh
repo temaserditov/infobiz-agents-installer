@@ -14,7 +14,8 @@ case "${LC_CTYPE:-}" in
 esac
 
 AGENT_PROFILE="${AGENT_PROFILE:-marketer}"
-AGENT_NAME="${AGENT_NAME:-Маркетолог}"
+AGENT_NAME="${AGENT_NAME:-Гермес и Маркетолог}"
+AGENT_PROFILE_ALLOW="${AGENT_PROFILE_ALLOW:-default,$AGENT_PROFILE}"
 VERSION="${VERSION:-0.1.0}"
 BASE_URL="${BASE_URL:-}"
 PROFILE_URL="${PROFILE_URL:-}"
@@ -511,7 +512,7 @@ install_web_shell() {
     <key>OBSIDIAN_VAULT</key>
     <string>$INSTALL_ROOT/obsidian-vault</string>
     <key>AGENT_PROFILE_ALLOW</key>
-    <string>$AGENT_PROFILE</string>
+    <string>$AGENT_PROFILE_ALLOW</string>
     <key>PATH</key>
     <string>$SHIM_DIR:$HERMES_ROOT/node/bin:$HERMES_AGENT_ROOT/venv/bin:$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
@@ -674,10 +675,12 @@ say "OpenAI/Hermes authorization"
 printf "The installer will open the authorization page and copy the code when Hermes prints it.\n"
 run_hermes_auth || fail "OpenAI/Hermes authorization failed"
 
-say "Installing Hermes gateway service for profile: $AGENT_PROFILE"
+say "Installing Hermes gateway services"
+run_hermes gateway install --force >> "$LOG_FILE" 2>&1 || true
 run_hermes -p "$AGENT_PROFILE" gateway install --force >> "$LOG_FILE" 2>&1 || true
 
-say "Starting Hermes gateway"
+say "Starting Hermes gateways"
+run_hermes gateway start >> "$LOG_FILE" 2>&1 || true
 run_hermes -p "$AGENT_PROFILE" gateway start >> "$LOG_FILE" 2>&1 || true
 
 say "Installing local web panel"

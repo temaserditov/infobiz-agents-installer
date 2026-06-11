@@ -91,7 +91,7 @@ const RULE_RISK_PATTERNS = [
   { id: "approval-prone", label: "approval-prone command path", pattern: /curl\s+|python3\s+.*<<|open\s+-a|osascript|subprocess|shell|terminal/i },
 ];
 const ROLE_SKILL_POLICY = {
-  default: { allowed: [], discouraged: ["browser", "media-gen", "telegram", "personal-data", "notion", "obsidian", "shell", "external-api"] },
+  default: { allowed: ["external-api", "media-gen", "telegram", "personal-data", "notion", "obsidian", "shell"], discouraged: ["browser"] },
   assistant: { allowed: ["obsidian", "personal-data", "external-api", "telegram"], discouraged: ["browser", "media-gen", "shell"] },
   coordinator: { allowed: ["obsidian"], discouraged: ["browser", "media-gen", "telegram", "personal-data", "notion", "shell", "external-api"] },
   copywriter: { allowed: ["telegram", "external-api", "obsidian"], discouraged: ["browser", "media-gen", "personal-data", "shell", "notion"] },
@@ -123,7 +123,7 @@ function profileDir(profile) {
 function listAgents() {
   const profiles = PROFILE_ALLOW.size && !PROFILE_ALLOW.has("default")
     ? []
-    : [{ id: "default", name: "HERMES", path: HERMES_ROOT }];
+    : [{ id: "default", name: "Гермес", path: HERMES_ROOT }];
   const root = join(HERMES_ROOT, "profiles");
   if (existsSync(root)) {
     for (const name of readdirSync(root).sort()) {
@@ -414,6 +414,7 @@ function agentLastMessage(agentId) {
 
 function nameLabel(id) {
   const labels = {
+    default: "Гермес",
     assistant: "Ассистент",
     coordinator: "Координатор",
     copywriter: "Копирайтер",
