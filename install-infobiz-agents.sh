@@ -411,6 +411,21 @@ PY
   ) >> "$LOG_FILE" 2>&1
 }
 
+enable_profile_telegram_platform() {
+  local config_path="$PROFILE_ROOT/config.yaml"
+  "$HERMES_AGENT_ROOT/venv/bin/python" - "$config_path" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text() if path.exists() else ""
+if "platforms:" in text and "  telegram:" in text and "    enabled: true" in text:
+    raise SystemExit(0)
+text = text.rstrip() + "\n\n# Infobiz Agents messaging defaults\nplatforms:\n  telegram:\n    enabled: true\n"
+path.write_text(text)
+PY
+}
+
 need_web_shell_payload() {
   if [[ -n "$WEB_SHELL_TARBALL" && -f "$WEB_SHELL_TARBALL" ]]; then
     printf "%s" "$WEB_SHELL_TARBALL"
@@ -453,6 +468,34 @@ install_web_shell() {
   /usr/bin/xattr -dr com.apple.provenance "$WEB_SHELL_ROOT" >/dev/null 2>&1 || true
   if [[ -f "$WEB_SHELL_ROOT/server.mjs" ]]; then
     /usr/bin/perl -0pi -e 's#join\(HERMES_AGENT_ROOT, "venv", "bin", "python3"\)#join(HERMES_AGENT_ROOT, "venv", "bin", "python")#g' "$WEB_SHELL_ROOT/server.mjs"
+    "$HERMES_AGENT_ROOT/venv/bin/python" - "$WEB_SHELL_ROOT/server.mjs" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+helper = r'''
+function ensureTelegramPlatformEnabled(agentId) {
+  const configPath = join(profileDir(agentId), "config.yaml");
+  let text = readText(configPath, "");
+  if (/^platforms:\s*$/m.test(text) && /(^|\n)  telegram:\s*\n(?:    .*\n)*?    enabled:\s*true\b/m.test(text)) return;
+  text = `${text.replace(/\s*$/, "")}\n\n# Infobiz Agents messaging defaults\nplatforms:\n  telegram:\n    enabled: true\n`;
+  writeFileSync(configPath, text, { encoding: "utf8", mode: 0o600 });
+}
+'''
+
+if "function ensureTelegramPlatformEnabled(agentId)" not in text:
+    marker = "function telegramSettings(agentId) {"
+    text = text.replace(marker, helper + "\n" + marker)
+
+needle = '  writeFileSync(path, text, { encoding: "utf8", mode: 0o600 });\n'
+replacement = needle + '  ensureTelegramPlatformEnabled(agentId);\n'
+if replacement not in text:
+    text = text.replace(needle, replacement, 1)
+
+path.write_text(text)
+PY
   fi
 
   if [[ -x "$HERMES_ROOT/node/bin/node" ]]; then
@@ -643,6 +686,7 @@ if [[ -d "$PROFILE_ROOT" ]]; then
 fi
 /bin/mkdir -p "$HERMES_ROOT/profiles"
 create_clean_hermes_profile "$AGENT_PROFILE" || fail "Could not create clean Hermes profile"
+enable_profile_telegram_platform || fail "Could not enable Telegram platform for profile"
 /usr/bin/ditto "$workdir/profile/skills" "$PROFILE_ROOT/skills"
 /usr/bin/xattr -dr com.apple.quarantine "$PROFILE_ROOT" >/dev/null 2>&1 || true
 /usr/bin/xattr -dr com.apple.provenance "$PROFILE_ROOT" >/dev/null 2>&1 || true
