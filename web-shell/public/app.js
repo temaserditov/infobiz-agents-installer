@@ -63,16 +63,7 @@ const state = {
   docCollapsed: new Set(),
 };
 
-const avatarSources = {
-  assistant: "/assets/avatars/assistant.jpg",
-  coordinator: "/assets/avatars/coordinator.jpg",
-  copywriter: "/assets/avatars/copywriter.jpg",
-  designer: "/assets/avatars/designer.jpg",
-  marketer: "/assets/avatars/marketer.jpg",
-  producer: "/assets/avatars/producer.jpg",
-  rop: "/assets/avatars/rop.jpg",
-  tech: "/assets/avatars/tech.jpg",
-};
+const avatarSources = {};
 
 const nullEl = {
   className: "",
@@ -241,18 +232,7 @@ function gatewayText(status) {
 }
 
 function avatarLabel(agent) {
-  const labels = {
-    default: "H",
-    assistant: "Ас",
-    coordinator: "Ко",
-    copywriter: "Кп",
-    designer: "Дз",
-    marketer: "Мр",
-    producer: "Пр",
-    rop: "Пж",
-    tech: "Тх",
-  };
-  return labels[agent.id] || agent.name.slice(0, 2).toUpperCase();
+  return "";
 }
 
 function agentAvatarSrc(agent) {
@@ -3384,7 +3364,7 @@ els.prompt.addEventListener("keydown", (event) => {
 function setView(view) {
   state.view = view;
   els.app.classList.toggle("mode-docs", view === "docs");
-  els.brandTitle.textContent = view === "docs" ? "Документы" : "Агенты Сердитова";
+  els.brandTitle.textContent = view === "docs" ? "Документы" : "Агенты";
   for (const item of document.querySelectorAll(".side-nav-item")) {
     item.classList.toggle("active", item.dataset.view === view);
   }
