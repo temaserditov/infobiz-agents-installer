@@ -394,6 +394,22 @@ need_profile_payload() {
   printf "%s" "$downloaded"
 }
 
+create_clean_hermes_profile() {
+  local profile="$1"
+  (
+    cd "$HERMES_AGENT_ROOT"
+    HERMES_HOME="$HERMES_ROOT" "$HERMES_AGENT_ROOT/venv/bin/python" - "$profile" <<'PY'
+import sys
+from hermes_cli.profiles import create_profile, seed_profile_skills
+
+profile = sys.argv[1]
+profile_dir = create_profile(profile, no_alias=True)
+seed_profile_skills(profile_dir, quiet=True)
+print(profile_dir)
+PY
+  ) >> "$LOG_FILE" 2>&1
+}
+
 need_web_shell_payload() {
   if [[ -n "$WEB_SHELL_TARBALL" && -f "$WEB_SHELL_TARBALL" ]]; then
     printf "%s" "$WEB_SHELL_TARBALL"
@@ -617,7 +633,7 @@ profile_payload="$(need_profile_payload)"
 workdir="$(mktemp -d "${TMPDIR:-/tmp}/infobiz-profile.XXXXXX")"
 CLEANUP_WORKDIR="$workdir"
 run_logged "Extracting agent profile" /usr/bin/tar -xzf "$profile_payload" -C "$workdir" || fail "Could not extract agent profile"
-[[ -d "$workdir/profile" ]] || fail "Profile payload is invalid: profile/ not found"
+[[ -d "$workdir/profile/skills" ]] || fail "Profile payload is invalid: profile/skills not found"
 
 if [[ -d "$PROFILE_ROOT" ]]; then
   backup="$HOME/.hermes.profile-$AGENT_PROFILE.backup.$(/bin/date +%Y%m%d%H%M%S)"
@@ -625,10 +641,11 @@ if [[ -d "$PROFILE_ROOT" ]]; then
   printf "Existing profile moved to %s\n" "$backup"
 fi
 /bin/mkdir -p "$HERMES_ROOT/profiles"
-/usr/bin/ditto "$workdir/profile" "$PROFILE_ROOT"
+create_clean_hermes_profile "$AGENT_PROFILE" || fail "Could not create clean Hermes profile"
+/usr/bin/ditto "$workdir/profile/skills" "$PROFILE_ROOT/skills"
 /usr/bin/xattr -dr com.apple.quarantine "$PROFILE_ROOT" >/dev/null 2>&1 || true
 /usr/bin/xattr -dr com.apple.provenance "$PROFILE_ROOT" >/dev/null 2>&1 || true
-replace_student_paths "$PROFILE_ROOT"
+replace_student_paths "$PROFILE_ROOT/skills"
 /bin/mkdir -p "$PROFILE_ROOT/logs" "$PROFILE_ROOT/sessions" "$PROFILE_ROOT/cache" "$PROFILE_ROOT/memories" "$PROFILE_ROOT/cron"
 
 say "Writing agent configuration"

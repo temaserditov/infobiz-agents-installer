@@ -24,8 +24,12 @@ does not call the official interactive installer:
 
 This avoids macOS Command Line Tools prompts on clean Macs.
 
-Our release payload contains only the `marketer` profile. It excludes auth,
-tokens, logs, sessions, state databases, and runtime files.
+The profile release payload contains only custom skill directories under
+`profile/skills/`. The installer creates a clean Hermes profile from the
+official repository first, seeds standard Hermes bundled skills when available,
+and then overlays our custom skills. It does not ship auth, tokens, local config,
+SOUL.md, logs, sessions, memories, state databases, or runtime files from a
+developer machine.
 
 The web panel payload contains portable source only. It excludes local run
 history, approval history, snapshots, preflights, uploads, and personal
@@ -34,13 +38,13 @@ baselines.
 ## Build profile payload
 
 ```bash
-./terminal-installer/build-profile-payload.sh
+./scripts/build-profile-payload.sh
 ```
 
 The archive is written to:
 
 ```text
-terminal-installer/dist/infobiz-agent-profile-marketer-0.1.0.tar.gz
+dist/infobiz-agent-profile-marketer-0.1.0.tar.gz
 ```
 
 ## Build web shell payload
@@ -57,7 +61,7 @@ It must contain a top-level `web-shell/` directory.
 
 ```bash
 PROFILE_TARBALL="/path/to/infobiz-agent-profile-marketer-0.1.0.tar.gz" \
-  ./terminal-installer/install-infobiz-agents.sh
+  ./install-infobiz-agents.sh
 ```
 
 ## Hosted install command
