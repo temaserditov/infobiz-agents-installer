@@ -443,6 +443,7 @@ install_web_shell() {
 
   port="$(choose_web_shell_port)"
   url="http://127.0.0.1:$port"
+  /bin/mkdir -p "$INSTALL_ROOT/workspace" "$INSTALL_ROOT/obsidian-vault" "$HOME/.hermes-workspaces"
   printf "%s\n" "$url" > "$INSTALL_ROOT/web-shell.url"
 
   label="com.infobiz.agents.web-shell"
@@ -479,7 +480,7 @@ install_web_shell() {
     <key>HERMES_AGENT_ROOT</key>
     <string>$HERMES_AGENT_ROOT</string>
     <key>HERMES_PYTHON</key>
-    <string>$HERMES_AGENT_ROOT/venv/bin/python3</string>
+    <string>$HERMES_AGENT_ROOT/venv/bin/python</string>
     <key>HERMES_WORKSPACES_ROOT</key>
     <string>$HOME/.hermes-workspaces</string>
     <key>AGENT_WORKSPACE</key>
