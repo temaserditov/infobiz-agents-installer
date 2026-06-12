@@ -124,3 +124,9 @@ The VPS installer creates these agents:
 WebShell is exposed as `http://SERVER_IP:8787/?token=...` and protected by a
 generated token. Agents use the internal local API
 `http://127.0.0.1:8787`.
+
+Remote uninstall from a local terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/uninstall-vps-remote.sh | bash -s -- root@SERVER_IP 'VPS_PASSWORD'
+```
