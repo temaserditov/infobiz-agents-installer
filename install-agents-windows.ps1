@@ -79,16 +79,16 @@ function Get-Plink {
 function Split-Server {
   param([string]$Target)
   $login = $User
-  $host = $Target
+  $targetHost = $Target
 
   if ($Target -match "^([^@]+)@(.+)$") {
     $login = $Matches[1]
-    $host = $Matches[2]
+    $targetHost = $Matches[2]
   }
 
   return @{
     Login = $login
-    Host = $host
+    Host = $targetHost
   }
 }
 
@@ -141,6 +141,7 @@ Write-Host "Сейчас Windows попросит пароль от VPS. При 
 Write-Host ""
 
 & $ssh -tt `
+  -o BatchMode=no `
   -E $debugLog `
   $Server `
   $remote
