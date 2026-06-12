@@ -1874,6 +1874,46 @@ button:disabled {
   min-width: 0;
 }
 
+.telegram-token-list {
+  display: grid;
+  gap: 12px;
+  padding: 0 20px;
+}
+
+.telegram-token-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 150px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: end;
+}
+
+.telegram-token-meta {
+  min-width: 0;
+}
+
+.telegram-token-meta strong,
+.telegram-token-meta small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.telegram-token-meta strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.telegram-token-meta small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.telegram-token-list .card-input {
+  font-size: 14px;
+}
+
 .settings-status {
   margin: 2px 20px 16px;
   padding: 10px 12px;
@@ -1911,6 +1951,10 @@ button:disabled {
   color: #fff;
   font-weight: 700;
   cursor: pointer;
+}
+
+#telegramToggle {
+  margin: 12px 20px 0;
 }
 
 .settings-save:disabled {

@@ -116,7 +116,7 @@ const els = {
   settingsPanel: document.querySelector("#settingsPanel") || nullEl,
   settingsClose: document.querySelector("#settingsClose") || nullEl,
   telegramStatus: document.querySelector("#telegramStatus") || nullEl,
-  telegramToken: document.querySelector("#telegramToken") || nullEl,
+  telegramAgentTokens: document.querySelector("#telegramAgentTokens") || nullEl,
   telegramToggle: document.querySelector("#telegramToggle") || nullEl,
   telegramSave: document.querySelector("#telegramSave") || nullEl,
   createGroup: document.querySelector("#createGroup") || nullEl,
@@ -767,28 +767,33 @@ async function loadAgents() {
   updateActive();
 }
 
-function settingsAgentId() {
-  return state.active || state.agents[0]?.id || "marketer";
-}
-
 async function loadTelegramSettings() {
-  const data = await api(`/api/agents/${settingsAgentId()}/telegram`);
+  const data = await api("/api/telegram");
   state.telegramSettings = data;
   renderTelegramSettings();
 }
 
 function renderTelegramSettings(message = "") {
   const settings = state.telegramSettings;
-  const configured = Boolean(settings?.configured);
-  els.telegramStatus.className = `settings-status ${configured ? "ok" : ""}`;
-  els.telegramStatus.textContent = message || (configured
-    ? `Telegram подключен: ${settings.tokenPreview}`
+  const profiles = settings?.profiles || [];
+  const configuredCount = profiles.filter((profile) => profile.configured).length;
+  els.telegramStatus.className = `settings-status ${configuredCount ? "ok" : ""}`;
+  els.telegramStatus.textContent = message || (profiles.length
+    ? `Подключено агентов: ${configuredCount} из ${profiles.length}`
     : "Telegram еще не подключен");
+  els.telegramAgentTokens.innerHTML = profiles.map((profile) => `
+    <label class="telegram-token-row">
+      <span class="telegram-token-meta">
+        <strong>${escapeHtml(profile.name || profile.profile)}</strong>
+        <small>${profile.configured ? `подключен: ${escapeHtml(profile.tokenPreview)}` : "токен не добавлен"}</small>
+      </span>
+      <input class="card-input telegram-token-input" data-agent="${escapeHtml(profile.profile)}" type="password" autocomplete="off" spellcheck="false" placeholder="1234567890:AA..." />
+    </label>
+  `).join("");
 }
 
 async function openSettings() {
   els.settingsPanel.hidden = false;
-  els.telegramToken.value = "";
   renderTelegramSettings("Проверяю Telegram…");
   try {
     await loadTelegramSettings();
@@ -804,19 +809,24 @@ function closeSettings() {
 
 async function saveTelegramSettings() {
   els.telegramSave.disabled = true;
-  renderTelegramSettings("Сохраняю токен и перезапускаю Telegram…");
+  renderTelegramSettings("Сохраняю токены и перезапускаю Telegram…");
   try {
-    const data = await api(`/api/agents/${settingsAgentId()}/telegram`, {
+    const tokens = {};
+    for (const input of els.telegramAgentTokens.querySelectorAll(".telegram-token-input")) {
+      const value = input.value.trim();
+      if (value) tokens[input.dataset.agent] = value;
+    }
+    const data = await api("/api/telegram", {
       method: "POST",
-      body: JSON.stringify({ token: els.telegramToken.value.trim() }),
+      body: JSON.stringify({ tokens }),
     });
     state.telegramSettings = data.settings;
-    renderTelegramSettings(data.restart?.restarted ? "Токен сохранен, Telegram перезапущен" : "Токен сохранен");
-    els.telegramToken.value = "";
+    const changed = data.results?.filter((item) => item.changed).length || 0;
+    renderTelegramSettings(changed ? `Сохранено токенов: ${changed}` : "Новые токены не введены");
     await refreshSidebar();
   } catch (error) {
     els.telegramStatus.className = "settings-status error";
-    els.telegramStatus.textContent = `Не удалось сохранить токен: ${error.message}`;
+    els.telegramStatus.textContent = `Не удалось сохранить токены: ${error.message}`;
   } finally {
     els.telegramSave.disabled = false;
   }
@@ -3287,9 +3297,10 @@ els.agentCard.addEventListener("click", (event) => {
 els.settingsBtn.addEventListener("click", openSettings);
 els.settingsClose.addEventListener("click", closeSettings);
 els.telegramToggle.addEventListener("click", () => {
-  const visible = els.telegramToken.type === "text";
-  els.telegramToken.type = visible ? "password" : "text";
-  els.telegramToggle.textContent = visible ? "Показать" : "Скрыть";
+  const inputs = [...els.telegramAgentTokens.querySelectorAll(".telegram-token-input")];
+  const visible = inputs.some((input) => input.type === "text");
+  for (const input of inputs) input.type = visible ? "password" : "text";
+  els.telegramToggle.textContent = visible ? "Показать токены" : "Скрыть токены";
 });
 els.telegramSave.addEventListener("click", saveTelegramSettings);
 els.settingsPanel.addEventListener("click", (event) => {

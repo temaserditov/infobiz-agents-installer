@@ -467,6 +467,10 @@ function gatewayLabel(profile) {
   return profile === "default" ? "ai.hermes.gateway" : `ai.hermes.gateway-${profile}`;
 }
 
+function systemdGatewayService(profile) {
+  return profile === "default" ? "infobiz-hermes-gateway.service" : `infobiz-hermes-gateway-${profile}.service`;
+}
+
 function readText(path, fallback = "") {
   try {
     return readFileSync(path, "utf8");
@@ -1880,6 +1884,14 @@ function resetAgentSessions(agentId) {
 function restartAgentGateway(agentId) {
   const dir = profileDir(agentId);
   if (!existsSync(dir)) throw new Error(`profile not found: ${agentId}`);
+  if (process.platform === "linux") {
+    const service = systemdGatewayService(agentId);
+    const restart = runCommand("systemctl", ["restart", service]);
+    if (restart.code !== 0) {
+      return { ok: false, restarted: false, label: service, error: restart.stderr || restart.stdout || `systemctl restart exited ${restart.code}` };
+    }
+    return { ok: true, restarted: true, label: service };
+  }
   const uid = String(process.getuid?.() || 501);
   const label = gatewayLabel(agentId);
   const plist = join(LAUNCH_AGENTS_DIR, `${label}.plist`);
@@ -1948,6 +1960,18 @@ function telegramSettings(agentId) {
   };
 }
 
+function telegramSettingsAll() {
+  const profiles = PROFILE_ORDER
+    .filter((id) => existsSync(profileDir(id)))
+    .map((id) => ({ name: nameLabel(id), ...telegramSettings(id) }));
+  return {
+    ok: true,
+    profiles,
+    configured: profiles.filter((profile) => profile.configured).length,
+    total: profiles.length,
+  };
+}
+
 function saveTelegramToken(agentId, token) {
   if (!/^[0-9]+:[A-Za-z0-9_-]{20,}$/.test(token) && token !== "") {
     throw new Error("invalid Telegram bot token");
@@ -1964,6 +1988,29 @@ function saveTelegramToken(agentId, token) {
     restart = { ok: false, restarted: false, error: error.message || String(error) };
   }
   return { ok: true, settings: telegramSettings(agentId), restart };
+}
+
+function saveTelegramTokens(tokens) {
+  if (!tokens || typeof tokens !== "object" || Array.isArray(tokens)) {
+    throw new Error("tokens object required");
+  }
+  const allowed = new Set(PROFILE_ORDER);
+  const results = [];
+  for (const [agentId, rawToken] of Object.entries(tokens)) {
+    if (!allowed.has(agentId)) continue;
+    const token = String(rawToken || "").trim();
+    if (!token) continue;
+    const before = telegramSettings(agentId).tokenPreview;
+    const saved = saveTelegramToken(agentId, token);
+    results.push({
+      profile: agentId,
+      name: nameLabel(agentId),
+      changed: saved.settings.tokenPreview !== before,
+      settings: saved.settings,
+      restart: saved.restart,
+    });
+  }
+  return { ok: true, settings: telegramSettingsAll(), results };
 }
 
 function resourceSummary() {
@@ -3168,6 +3215,17 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/api/maintenance") {
       sendJson(res, 200, maintenanceSummary());
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/telegram") {
+      sendJson(res, 200, telegramSettingsAll());
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/telegram") {
+      const body = await readBody(req);
+      sendJson(res, 200, saveTelegramTokens(body.tokens || {}));
       return;
     }
 

@@ -225,13 +225,10 @@
         <section class="profile-section">
           <div class="profile-section-title">Telegram</div>
           <div id="telegramStatus" class="settings-status">Проверяю…</div>
-          <label class="card-label" for="telegramToken">Bot Token</label>
-          <div class="token-row">
-            <input id="telegramToken" class="card-input" type="password" autocomplete="off" spellcheck="false" placeholder="1234567890:AA..." />
-            <button id="telegramToggle" type="button" class="card-text-btn">Показать</button>
-          </div>
+          <div id="telegramAgentTokens" class="telegram-token-list"></div>
+          <button id="telegramToggle" type="button" class="card-text-btn">Показать токены</button>
           <button id="telegramSave" type="button" class="settings-save">Сохранить и перезапустить Telegram</button>
-          <div id="telegramHint" class="settings-hint">Токен можно взять у BotFather. Поле можно оставить пустым, если Telegram пока не нужен.</div>
+          <div id="telegramHint" class="settings-hint">Токены можно взять у BotFather. Пустые поля не меняют текущие настройки агента.</div>
         </section>
       </div>
     </div>

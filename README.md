@@ -140,3 +140,9 @@ Windows PowerShell installer:
 ```powershell
 powershell -ExecutionPolicy Bypass -Command "iex (irm 'https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/start-windows-installer.ps1')"
 ```
+
+Windows PowerShell update for an already installed VPS:
+
+```powershell
+powershell -ExecutionPolicy Bypass -Command "iex (irm 'https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/update-agents-windows.ps1')"
+```
