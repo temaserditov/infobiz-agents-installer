@@ -33,5 +33,12 @@ mkdir -p "$PAYLOAD_DIR/skills" "$OUT_DIR"
   --exclude '.usage.json' \
   "$SKILLS_SOURCE/" "$PAYLOAD_DIR/skills/"
 
+if [[ -d "$REPO_ROOT/skills" ]]; then
+  /usr/bin/rsync -a \
+    --exclude '.DS_Store' \
+    --exclude '__pycache__' \
+    "$REPO_ROOT/skills/" "$PAYLOAD_DIR/skills/"
+fi
+
 tar -C "$BUILD_DIR" -czf "$TARBALL" profile
 echo "$TARBALL"

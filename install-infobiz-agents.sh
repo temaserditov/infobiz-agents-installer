@@ -455,6 +455,7 @@ choose_web_shell_port() {
 
 install_web_shell() {
   local payload workdir node_cmd port plist label uid url
+  local api_url
   payload="$(need_web_shell_payload)"
   workdir="$(mktemp -d "${TMPDIR:-/tmp}/infobiz-web-shell.XXXXXX")"
   /usr/bin/tar -xzf "$payload" -C "$workdir" || return 1
@@ -508,6 +509,7 @@ PY
 
   port="$(choose_web_shell_port)"
   url="${WEB_SHELL_PUBLIC_URL:-http://$WEB_SHELL_HOST:$port}"
+  api_url="http://$WEB_SHELL_HOST:$port"
   /bin/mkdir -p "$INSTALL_ROOT/workspace" "$INSTALL_ROOT/obsidian-vault" "$HOME/.hermes-workspaces"
   printf "%s\n" "$url" > "$INSTALL_ROOT/web-shell.url"
 
@@ -556,6 +558,8 @@ PY
     <string>$INSTALL_ROOT/obsidian-vault</string>
     <key>AGENT_PROFILE_ALLOW</key>
     <string>$AGENT_PROFILE_ALLOW</string>
+    <key>WEB_SHELL_API_URL</key>
+    <string>$api_url</string>
     <key>PATH</key>
     <string>$SHIM_DIR:$HERMES_ROOT/node/bin:$HERMES_AGENT_ROOT/venv/bin:$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
@@ -688,6 +692,10 @@ fi
 create_clean_hermes_profile "$AGENT_PROFILE" || fail "Could not create clean Hermes profile"
 enable_profile_telegram_platform || fail "Could not enable Telegram platform for profile"
 /usr/bin/ditto "$workdir/profile/skills" "$PROFILE_ROOT/skills"
+if [[ -d "$workdir/profile/skills/webshell-docs" ]]; then
+  /bin/rm -rf "$HERMES_ROOT/skills/webshell-docs"
+  /usr/bin/ditto "$workdir/profile/skills/webshell-docs" "$HERMES_ROOT/skills/webshell-docs"
+fi
 /usr/bin/xattr -dr com.apple.quarantine "$PROFILE_ROOT" >/dev/null 2>&1 || true
 /usr/bin/xattr -dr com.apple.provenance "$PROFILE_ROOT" >/dev/null 2>&1 || true
 replace_student_paths "$PROFILE_ROOT/skills"

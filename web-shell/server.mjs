@@ -379,6 +379,32 @@ function deleteDoc(id) {
   return { ok: true, removed: [...remove] };
 }
 
+function searchDocs(query, limit = 20) {
+  const q = String(query || "").trim().toLowerCase();
+  const max = Math.min(Math.max(Number(limit) || 20, 1), 50);
+  if (!q) return { query: q, results: [] };
+  const results = readDocs()
+    .map((doc) => {
+      const title = String(doc.title || "");
+      const content = String(doc.content || "");
+      const haystack = `${title}\n${content}`.toLowerCase();
+      const index = haystack.indexOf(q);
+      if (index === -1) return null;
+      const raw = `${title}\n${content}`.replace(/\s+/g, " ").trim();
+      const start = Math.max(0, index - 80);
+      return {
+        id: doc.id,
+        title: title || "Без названия",
+        parentId: doc.parentId || null,
+        updatedAt: doc.updatedAt || "",
+        snippet: raw.slice(start, start + 220),
+      };
+    })
+    .filter(Boolean)
+    .slice(0, max);
+  return { query: q, results };
+}
+
 function agentLastMessage(agentId) {
   const sessionsDir = join(profileDir(agentId), "sessions");
   if (!existsSync(sessionsDir)) return null;
@@ -2784,6 +2810,7 @@ function startRun({ profile, message, sessionId, toolMode, sourceSessionId, atta
     HERMES_GATEWAY_SESSION: "1",
     AGENT_WEB_APPROVAL_DIR: approvalDir,
     AGENT_WEB_TOOL_MODE: String(toolMode || "focused"),
+    WEB_SHELL_API_URL: process.env.WEB_SHELL_API_URL || `http://${HOST}:${PORT}`,
     OBSIDIAN_VAULT,
     PYTHONPATH: `${HERMES_AGENT_ROOT}${process.env.PYTHONPATH ? `:${process.env.PYTHONPATH}` : ""}`,
     PATH: [
@@ -3362,6 +3389,11 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/docs") {
       const body = await readBody(req);
       sendJson(res, 201, { doc: createDoc(body) });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/docs/search") {
+      sendJson(res, 200, searchDocs(url.searchParams.get("q") || "", url.searchParams.get("limit") || 20));
       return;
     }
 

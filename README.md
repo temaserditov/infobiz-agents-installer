@@ -17,6 +17,8 @@ does not call the official interactive installer:
   terminal installer
 - The Documents tab is built into the web panel and uses local `docs.json`;
   it does not require a separate docs server on port 3030
+- Agents can use the bundled `webshell-docs` skill to create, search, update,
+  and delete pages in the built-in Documents database through the WebShell API
 - VPS installers can provide `WEB_SHELL_PUBLIC_URL` when the panel is exposed
   through a tunnel or public HTTPS endpoint
 - Student-facing output: quiet Infobiz steps only
@@ -27,9 +29,11 @@ This avoids macOS Command Line Tools prompts on clean Macs.
 The profile release payload contains only custom skill directories under
 `profile/skills/`. The installer creates a clean Hermes profile from the
 official repository first, seeds standard Hermes bundled skills when available,
-and then overlays our custom skills. It does not ship auth, tokens, local config,
-SOUL.md, logs, sessions, memories, state databases, or runtime files from a
-developer machine.
+and then overlays our custom skills. The shared `webshell-docs` skill is also
+copied into the default Hermes profile so both `Гермес` and `Маркетолог` can
+work with built-in documents. The payload does not ship auth, tokens, local
+config, SOUL.md, logs, sessions, memories, state databases, or runtime files
+from a developer machine.
 
 The web panel payload contains portable source only. It excludes local run
 history, approval history, snapshots, preflights, uploads, and personal
