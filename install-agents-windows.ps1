@@ -62,6 +62,11 @@ if (-not $Server) {
 }
 
 if ($Server -notmatch "@") {
+  $inputUser = Read-Host "Введите логин VPS или нажмите Enter для root"
+  $inputUser = $inputUser.Trim()
+  if ($inputUser) {
+    $User = $inputUser
+  }
   $Server = "$User@$Server"
 }
 
@@ -84,6 +89,7 @@ Write-Host ""
 
 if ($LASTEXITCODE -ne 0) {
   Write-Host ""
-  Write-Host "Установка завершилась с ошибкой. Проверь IP, пароль и доступ к VPS." -ForegroundColor Red
+  Write-Host "Установка завершилась с ошибкой. Проверь IP, логин, пароль и доступ к VPS." -ForegroundColor Red
+  Write-Host "Если видишь Permission denied: чаще всего пароль верный, но логин не root, или VPS запрещает вход по паролю." -ForegroundColor Yellow
   exit $LASTEXITCODE
 }
