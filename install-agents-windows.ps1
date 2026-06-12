@@ -20,8 +20,8 @@ function Test-Admin {
 
 function Find-Ssh {
   $candidates = @(
-    "$env:WINDIR\Sysnative\OpenSSH\ssh.exe",
-    "$env:WINDIR\System32\OpenSSH\ssh.exe"
+    "$env:WINDIR\System32\OpenSSH\ssh.exe",
+    "$env:WINDIR\Sysnative\OpenSSH\ssh.exe"
   )
   foreach ($path in $candidates) {
     if (Test-Path $path) { return $path }
