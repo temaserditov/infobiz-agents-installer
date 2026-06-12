@@ -125,6 +125,10 @@ WebShell is exposed as `http://SERVER_IP:8787/?token=...` and protected by a
 generated token. Agents use the internal local API
 `http://127.0.0.1:8787`.
 
+The default VPS installer UI is quiet: it shows a simple progress bar, pauses
+only for OpenAI device-code authorization, and prints the WebShell URL at the
+end. Set `STUDENT_UI=0` for verbose technical output.
+
 Remote uninstall from a local terminal:
 
 ```bash

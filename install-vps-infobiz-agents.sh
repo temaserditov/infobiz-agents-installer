@@ -16,6 +16,7 @@ WEB_SHELL_PORT="${WEB_SHELL_PORT:-8787}"
 WEB_SHELL_HOST="${WEB_SHELL_HOST:-0.0.0.0}"
 PUBLIC_HOST="${PUBLIC_HOST:-}"
 WEB_SHELL_ACCESS_TOKEN="${WEB_SHELL_ACCESS_TOKEN:-}"
+STUDENT_UI="${STUDENT_UI:-1}"
 
 INSTALL_ROOT="${INSTALL_ROOT:-$HOME/InfobizAgents}"
 HERMES_ROOT="${HERMES_ROOT:-$HOME/.hermes}"
@@ -25,15 +26,47 @@ LOG_FILE="$INSTALL_ROOT/install.log"
 HERMES_CMD="$HERMES_AGENT_ROOT/venv/bin/hermes"
 UV_CMD=""
 TMP_ROOT="${TMPDIR:-/tmp}/infobiz-vps-install.$$"
+PROGRESS_STEP=0
+PROGRESS_TOTAL=11
 
 export DEBIAN_FRONTEND=noninteractive
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HERMES_ROOT/node/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 say() {
-  printf "\n==> %s\n" "$1"
+  if [[ "$STUDENT_UI" == "1" ]]; then
+    printf "\n==> %s\n" "$1" >> "$LOG_FILE"
+  else
+    printf "\n==> %s\n" "$1"
+  fi
+}
+
+render_progress() {
+  [[ "$STUDENT_UI" == "1" ]] || return 0
+  local label="$1"
+  local percent=$((PROGRESS_STEP * 100 / PROGRESS_TOTAL))
+  local width=42
+  local filled=$((percent * width / 100))
+  local empty=$((width - filled))
+  local bar spaces
+  bar="$(printf '%*s' "$filled" '' | tr ' ' '#')"
+  spaces="$(printf '%*s' "$empty" '')"
+  printf "\033[2J\033[H"
+  printf "Идет установка агентов\n\n"
+  printf "%s\n\n" "$label"
+  printf "[\033[32m%s\033[0m%s] %s%%\n" "$bar" "$spaces" "$percent"
+  printf "\nЭто может занять несколько минут. Подробный лог пишется на сервере.\n"
+}
+
+progress_stage() {
+  local label="$1"
+  if (( PROGRESS_STEP < PROGRESS_TOTAL )); then
+    PROGRESS_STEP=$((PROGRESS_STEP + 1))
+  fi
+  render_progress "$label"
 }
 
 fail() {
+  [[ "$STUDENT_UI" == "1" ]] && printf "\n"
   printf "\nERROR: %s\n" "$1" >&2
   printf "Log file: %s\n" "$LOG_FILE" >&2
   exit 1
@@ -60,7 +93,11 @@ run_logged() {
   shift
   local start now elapsed exit_code pid
   start="$(date +%s)"
-  printf "   %s... 0s" "$label"
+  if [[ "$STUDENT_UI" != "1" ]]; then
+    printf "   %s... 0s" "$label"
+  else
+    render_progress "$label"
+  fi
   {
     printf "\n\n[%s] %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$label"
     printf "Command:"
@@ -72,7 +109,9 @@ run_logged() {
   while kill -0 "$pid" >/dev/null 2>&1; do
     now="$(date +%s)"
     elapsed=$((now - start))
-    printf "\r   %s... %s" "$label" "$(format_seconds "$elapsed")"
+    if [[ "$STUDENT_UI" != "1" ]]; then
+      printf "\r   %s... %s" "$label" "$(format_seconds "$elapsed")"
+    fi
     sleep 1
   done
   set +e
@@ -80,10 +119,12 @@ run_logged() {
   exit_code=$?
   set -e
   elapsed=$(($(date +%s) - start))
-  if (( exit_code == 0 )); then
-    printf "\r   %s... done in %s\n" "$label" "$(format_seconds "$elapsed")"
-  else
-    printf "\r   %s... failed after %s\n" "$label" "$(format_seconds "$elapsed")"
+  if [[ "$STUDENT_UI" != "1" ]]; then
+    if (( exit_code == 0 )); then
+      printf "\r   %s... done in %s\n" "$label" "$(format_seconds "$elapsed")"
+    else
+      printf "\r   %s... failed after %s\n" "$label" "$(format_seconds "$elapsed")"
+    fi
   fi
   return "$exit_code"
 }
@@ -91,9 +132,13 @@ run_logged() {
 download_file() {
   local url="$1"
   local output="$2"
-  printf "   Downloading: %s\n" "$url"
+  [[ "$STUDENT_UI" != "1" ]] && printf "   Downloading: %s\n" "$url"
   printf "Downloading: %s\n" "$url" >> "$LOG_FILE"
-  curl -fL --progress-bar "$url" -o "$output" 2> >(tee -a "$LOG_FILE" >&2)
+  if [[ "$STUDENT_UI" == "1" ]]; then
+    curl -fsSL "$url" -o "$output" >> "$LOG_FILE" 2>&1
+  else
+    curl -fL --progress-bar "$url" -o "$output" 2> >(tee -a "$LOG_FILE" >&2)
+  fi
 }
 
 detect_public_host() {
@@ -278,7 +323,7 @@ install_profiles_and_skills() {
     rsync -a "$workdir/profile/skills/" "$HERMES_ROOT/profiles/$profile/skills/"
     skill_count="$(find "$HERMES_ROOT/profiles/$profile/skills" -name 'SKILL.md' -type f | wc -l | tr -d ' ')"
     [[ "$skill_count" != "0" ]] || fail "No skills were installed for profile: $profile"
-    printf "Installed %s skills for %s\n" "$skill_count" "$profile"
+    printf "Installed %s skills for %s\n" "$skill_count" "$profile" >> "$LOG_FILE"
     write_profile_env "$profile"
     enable_telegram_platform "$HERMES_ROOT/profiles/$profile"
   done
@@ -390,8 +435,15 @@ open_firewall_if_available() {
 }
 
 run_openai_auth() {
-  say "OpenAI/Hermes authorization"
-  printf "Follow the device-code instructions below. Open the URL on your computer or phone.\n"
+  if [[ "$STUDENT_UI" == "1" ]]; then
+    printf "\033[2J\033[H"
+    printf "Нужна авторизация OpenAI\n\n"
+    printf "Сейчас появится ссылка и код. Открой ссылку на своем компьютере или телефоне,\n"
+    printf "введи код, и установка продолжится автоматически.\n\n"
+  else
+    say "OpenAI/Hermes authorization"
+    printf "Follow the device-code instructions below. Open the URL on your computer or phone.\n"
+  fi
   run_hermes auth add openai-codex
 }
 
@@ -399,27 +451,43 @@ main() {
   mkdir -p "$INSTALL_ROOT" "$TMP_ROOT"
   : > "$LOG_FILE"
   printf "Infobiz Agents VPS install log\nStarted: %s\n" "$(date)" >> "$LOG_FILE"
+  [[ "$STUDENT_UI" == "1" ]] && render_progress "Подготовка"
   require_linux
   say "Installing Infobiz Agents VPS stack"
+  progress_stage "Подготовка сервера"
   install_system_packages
+  progress_stage "Установка менеджера Python"
   ensure_uv
+  progress_stage "Установка Node.js"
   install_node_runtime
+  progress_stage "Установка Hermes"
   install_hermes_from_source
+  progress_stage "Создание агентов и установка скиллов"
   install_profiles_and_skills
   run_openai_auth
+  progress_stage "Установка WebShell"
   install_web_shell
+  progress_stage "Запуск панели агентов"
   install_systemd_services
+  progress_stage "Запуск gateway-сервисов"
   install_gateway_systemd_services
+  progress_stage "Открытие доступа"
   open_firewall_if_available
 
   public_host="$(detect_public_host)"
   public_url="http://$public_host:$WEB_SHELL_PORT/?token=$WEB_SHELL_ACCESS_TOKEN"
   printf "%s\n" "$public_url" > "$INSTALL_ROOT/web-shell.url"
 
-  say "Done"
-  printf "Панель агентов:\n%s\n\n" "$public_url"
-  printf "Локальный API для агентов:\nhttp://127.0.0.1:%s\n\n" "$WEB_SHELL_PORT"
-  printf "Лог установки:\n%s\n" "$LOG_FILE"
+  if [[ "$STUDENT_UI" == "1" ]]; then
+    PROGRESS_STEP="$PROGRESS_TOTAL"
+    render_progress "Готово"
+    printf "\nПанель агентов:\n%s\n" "$public_url"
+  else
+    say "Done"
+    printf "Панель агентов:\n%s\n\n" "$public_url"
+    printf "Локальный API для агентов:\nhttp://127.0.0.1:%s\n\n" "$WEB_SHELL_PORT"
+    printf "Лог установки:\n%s\n" "$LOG_FILE"
+  fi
 }
 
 main "$@"
