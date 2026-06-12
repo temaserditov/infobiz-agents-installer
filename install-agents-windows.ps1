@@ -53,11 +53,11 @@ function Ensure-OpenSsh {
 }
 
 if (-not $Server) {
-  $Server = Read-Host "Введите IP VPS"
+  $Server = Read-Host "Введите SSH-доступ к VPS из панели хостинга (например root@1.2.3.4) или просто IP"
 }
 $Server = $Server.Trim()
 if (-not $Server) {
-  Write-Host "IP VPS не указан." -ForegroundColor Red
+  Write-Host "VPS не указан." -ForegroundColor Red
   exit 1
 }
 
@@ -84,12 +84,15 @@ Write-Host ""
   -o StrictHostKeyChecking=no `
   -o UserKnownHostsFile=NUL `
   -o LogLevel=ERROR `
+  -o PubkeyAuthentication=no `
+  -o PreferredAuthentications=password `
+  -o NumberOfPasswordPrompts=3 `
   $Server `
   $remote
 
 if ($LASTEXITCODE -ne 0) {
   Write-Host ""
   Write-Host "Установка завершилась с ошибкой. Проверь IP, логин, пароль и доступ к VPS." -ForegroundColor Red
-  Write-Host "Если видишь Permission denied: чаще всего пароль верный, но логин не root, или VPS запрещает вход по паролю." -ForegroundColor Yellow
+  Write-Host "Если видишь Permission denied: это SSH-сервер не принял логин/пароль. Проверь в панели VPS точную строку подключения, например root@IP, ubuntu@IP или admin@IP." -ForegroundColor Yellow
   exit $LASTEXITCODE
 }
