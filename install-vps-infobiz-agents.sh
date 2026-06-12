@@ -275,11 +275,10 @@ install_profiles_and_skills() {
     say "Creating profile: $profile"
     create_clean_profile "$profile"
     mkdir -p "$HERMES_ROOT/profiles/$profile/skills"
-    if [[ "$profile" == "marketer" ]]; then
-      rsync -a "$workdir/profile/skills/" "$HERMES_ROOT/profiles/$profile/skills/"
-    elif [[ -d "$workdir/profile/skills/webshell-docs" ]]; then
-      rsync -a "$workdir/profile/skills/webshell-docs" "$HERMES_ROOT/profiles/$profile/skills/"
-    fi
+    rsync -a "$workdir/profile/skills/" "$HERMES_ROOT/profiles/$profile/skills/"
+    skill_count="$(find "$HERMES_ROOT/profiles/$profile/skills" -name 'SKILL.md' -type f | wc -l | tr -d ' ')"
+    [[ "$skill_count" != "0" ]] || fail "No skills were installed for profile: $profile"
+    printf "Installed %s skills for %s\n" "$skill_count" "$profile"
     write_profile_env "$profile"
     enable_telegram_platform "$HERMES_ROOT/profiles/$profile"
   done
