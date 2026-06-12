@@ -1682,23 +1682,25 @@ function preflightSummary(agentId, message = "") {
   const roleRisk = promptRoleRisk(agentId, promptRisk.hits);
   const routing = promptRoutingSummary(text, agentId, promptRisk);
   const checks = [
-    { id: "gateway", label: "Gateway running", ok: diagnostics.gateway.status === "running" },
-    { id: "sessions", label: "Active sessions are not bloated", ok: diagnostics.sessions.bloatedCount === 0 },
-    { id: "legacy", label: "No legacy OpenClaw/browser process", ok: diagnostics.forbiddenProcesses.length === 0 },
-    { id: "prompt-size", label: "Prompt size is within web-shell limit", ok: true },
-    { id: "prompt-risk", label: "Prompt does not look like browser/payment/order automation", ok: promptRisk.blockers.length === 0 },
-    { id: "prompt-role-policy", label: "Prompt matches selected agent role", ok: roleRisk.blockers.length === 0 },
+    { id: "gateway", label: "Gateway running", failLabel: "Gateway is not running", ok: diagnostics.gateway.status === "running", blocking: true },
+    { id: "sessions", label: "Active sessions are not bloated", failLabel: "Active sessions are bloated", ok: diagnostics.sessions.bloatedCount === 0, blocking: false },
+    { id: "legacy", label: "No legacy OpenClaw/browser process", failLabel: "Legacy OpenClaw/browser process detected", ok: diagnostics.forbiddenProcesses.length === 0, blocking: false },
+    { id: "prompt-size", label: "Prompt size is within web-shell limit", failLabel: "Prompt is too large", ok: true, blocking: true },
+    { id: "prompt-risk", label: "Prompt does not look like browser/payment/order automation", failLabel: "Prompt looks like browser/payment/order automation", ok: promptRisk.blockers.length === 0, blocking: true },
+    { id: "prompt-role-policy", label: "Prompt matches selected agent role", failLabel: "Prompt does not match selected agent role", ok: roleRisk.blockers.length === 0, blocking: true },
   ];
   if (text) {
     const lower = text.toLowerCase();
     checks.push({
       id: "legacy-prompt",
       label: "Prompt does not explicitly ask for OpenClaw",
+      failLabel: "Prompt explicitly asks for OpenClaw",
       ok: !FORBIDDEN_PATTERNS.some((pattern) => lower.includes(pattern.toLowerCase())),
+      blocking: true,
     });
   }
   return {
-    ok: checks.every((check) => check.ok),
+    ok: checks.every((check) => check.ok || !check.blocking),
     checks,
     promptRisk,
     roleRisk,

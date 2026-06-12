@@ -2640,7 +2640,10 @@ async function startAgentRun(rawMessage, attachments = [], targetId = null) {
     renderPromptRouter();
     loadPreflights().catch(() => {});
     if (!preflight.ok) {
-      const failed = preflight.checks.filter((check) => !check.ok).map((check) => check.label).join("; ");
+      const failed = preflight.checks
+        .filter((check) => !check.ok && check.blocking !== false)
+        .map((check) => check.failLabel || check.label)
+        .join("; ");
       const risk = preflight.promptRisk?.blockers?.length
         ? ` Риск: ${preflight.promptRisk.blockers.join(", ")}. Режим: ${modeLabel(preflight.promptRisk.suggestedMode)}.`
         : "";
@@ -2819,7 +2822,9 @@ async function previewPrompt() {
     state.promptRouter = preflight.routing;
     renderPromptRouter();
     loadPreflights().catch(() => {});
-    const failed = preflight.checks.filter((check) => !check.ok).map((check) => check.label);
+    const failed = preflight.checks
+      .filter((check) => !check.ok && check.blocking !== false)
+      .map((check) => check.failLabel || check.label);
     const hits = preflight.promptRisk?.hits?.length ? preflight.promptRisk.hits.join(", ") : "нет";
     const blockers = preflight.promptRisk?.blockers?.length ? preflight.promptRisk.blockers.join(", ") : "нет";
     const roleBlockers = preflight.roleRisk?.blockers?.length ? preflight.roleRisk.blockers.join(", ") : "нет";
