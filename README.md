@@ -138,5 +138,5 @@ curl -fsSL https://raw.githubusercontent.com/temaserditov/infobiz-agents-install
 Windows PowerShell installer:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/install-agents-windows.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "iex (irm 'https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/start-windows-installer.ps1')"
 ```
