@@ -52,6 +52,65 @@ function Ensure-OpenSsh {
   return $ssh
 }
 
+function Get-PlainTextPassword {
+  $secure = Read-Host "Введите пароль VPS для запасного подключения" -AsSecureString
+  $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+  try {
+    return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)
+  } finally {
+    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)
+  }
+}
+
+function Get-Plink {
+  $toolDir = Join-Path $env:TEMP "infobiz-agents-tools"
+  $plink = Join-Path $toolDir "plink.exe"
+  if (Test-Path $plink) {
+    return $plink
+  }
+
+  Write-Step "Подготовка запасного SSH-подключения"
+  New-Item -ItemType Directory -Force -Path $toolDir | Out-Null
+  $url = "https://the.earth.li/~sgtatham/putty/latest/w64/plink.exe"
+  Invoke-WebRequest -Uri $url -OutFile $plink
+  return $plink
+}
+
+function Split-Server {
+  param([string]$Target)
+  $login = $User
+  $host = $Target
+
+  if ($Target -match "^([^@]+)@(.+)$") {
+    $login = $Matches[1]
+    $host = $Matches[2]
+  }
+
+  return @{
+    Login = $login
+    Host = $host
+  }
+}
+
+function Invoke-PlinkInstall {
+  param(
+    [string]$Target,
+    [string]$RemoteCommand
+  )
+
+  $parts = Split-Server $Target
+  $plink = Get-Plink
+  $password = Get-PlainTextPassword
+
+  Write-Step "Повторное подключение через PuTTY/Plink"
+  Write-Host "Если появится вопрос о ключе сервера, скрипт автоматически ответит yes." -ForegroundColor Gray
+  Write-Host ""
+
+  "y" | & $plink -ssh -P 22 -l $parts.Login -pw $password $parts.Host "exit"
+  & $plink -ssh -t -P 22 -l $parts.Login -pw $password $parts.Host $RemoteCommand
+  return $LASTEXITCODE
+}
+
 if (-not $Server) {
   $Server = Read-Host "Введите SSH-доступ к VPS из панели хостинга (например root@1.2.3.4) или просто IP"
 }
@@ -84,15 +143,21 @@ Write-Host ""
   -o StrictHostKeyChecking=no `
   -o UserKnownHostsFile=NUL `
   -o LogLevel=ERROR `
+  -o KbdInteractiveAuthentication=yes `
   -o PubkeyAuthentication=no `
-  -o PreferredAuthentications=password `
+  -o PreferredAuthentications=keyboard-interactive,password `
   -o NumberOfPasswordPrompts=3 `
   $Server `
   $remote
 
 if ($LASTEXITCODE -ne 0) {
   Write-Host ""
-  Write-Host "Установка завершилась с ошибкой. Проверь IP, логин, пароль и доступ к VPS." -ForegroundColor Red
-  Write-Host "Если видишь Permission denied: это SSH-сервер не принял логин/пароль. Проверь в панели VPS точную строку подключения, например root@IP, ubuntu@IP или admin@IP." -ForegroundColor Yellow
-  exit $LASTEXITCODE
+  Write-Host "Встроенный Windows SSH не подключился. Пробую запасной режим." -ForegroundColor Yellow
+  $plinkExit = Invoke-PlinkInstall -Target $Server -RemoteCommand $remote
+  if ($plinkExit -ne 0) {
+    Write-Host ""
+    Write-Host "Установка завершилась с ошибкой. Проверь IP, логин, пароль и доступ к VPS." -ForegroundColor Red
+    Write-Host "Если видишь Permission denied: это SSH-сервер не принял логин/пароль. Проверь точную строку подключения в панели VPS или сбрось пароль root." -ForegroundColor Yellow
+    exit $plinkExit
+  }
 }
