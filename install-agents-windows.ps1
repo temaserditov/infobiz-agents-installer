@@ -123,20 +123,15 @@ function Invoke-PlinkInstall {
 }
 
 if (-not $Server) {
-  $Server = Read-Host "Введите SSH-доступ к VPS из панели хостинга (например root@1.2.3.4) или просто IP"
+  $Server = Read-Host "Введите IP VPS"
 }
 $Server = $Server.Trim()
 if (-not $Server) {
-  Write-Host "VPS не указан." -ForegroundColor Red
+  Write-Host "IP VPS не указан." -ForegroundColor Red
   exit 1
 }
 
 if ($Server -notmatch "@") {
-  $inputUser = Read-Host "Введите логин VPS или нажмите Enter для root"
-  $inputUser = $inputUser.Trim()
-  if ($inputUser) {
-    $User = $inputUser
-  }
   $Server = "$User@$Server"
 }
 
