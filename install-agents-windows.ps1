@@ -19,16 +19,17 @@ function Test-Admin {
 }
 
 function Find-Ssh {
-  $cmd = Get-Command ssh -ErrorAction SilentlyContinue
-  if ($cmd) { return $cmd.Source }
-
   $candidates = @(
-    "$env:WINDIR\System32\OpenSSH\ssh.exe",
-    "$env:WINDIR\Sysnative\OpenSSH\ssh.exe"
+    "$env:WINDIR\Sysnative\OpenSSH\ssh.exe",
+    "$env:WINDIR\System32\OpenSSH\ssh.exe"
   )
   foreach ($path in $candidates) {
     if (Test-Path $path) { return $path }
   }
+
+  $cmd = Get-Command ssh -ErrorAction SilentlyContinue
+  if ($cmd) { return $cmd.Source }
+
   return $null
 }
 
@@ -137,6 +138,7 @@ STUDENT_UI=1 VERSION='0.1.0' BASE_URL='https://github.com/temaserditov/infobiz-a
 '@
 
 Write-Step "Подключение к VPS"
+Write-Host "SSH-клиент: $ssh" -ForegroundColor Gray
 Write-Host "Сейчас Windows попросит пароль от VPS. При вводе пароль может не отображаться — это нормально." -ForegroundColor Gray
 Write-Host ""
 
