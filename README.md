@@ -134,3 +134,9 @@ Remote uninstall from a local terminal:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/uninstall-vps-remote.sh | bash -s -- root@SERVER_IP 'VPS_PASSWORD'
 ```
+
+Windows PowerShell installer:
+
+```powershell
+powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/install-agents-windows.ps1 | iex"
+```
