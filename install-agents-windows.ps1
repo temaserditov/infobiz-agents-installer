@@ -141,13 +141,6 @@ Write-Host "Сейчас Windows попросит пароль от VPS. При 
 Write-Host ""
 
 & $ssh -tt `
-  -o StrictHostKeyChecking=no `
-  -o UserKnownHostsFile=NUL `
-  -o LogLevel=ERROR `
-  -o KbdInteractiveAuthentication=yes `
-  -o PubkeyAuthentication=no `
-  -o PreferredAuthentications=keyboard-interactive,password `
-  -o NumberOfPasswordPrompts=3 `
   -E $debugLog `
   $Server `
   $remote
