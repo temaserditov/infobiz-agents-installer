@@ -98,6 +98,12 @@ Remote install from a local terminal:
 curl -fsSL https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/install-vps-remote.sh | bash -s -- root@SERVER_IP
 ```
 
+Remote install with password in one command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/install-vps-remote.sh | bash -s -- root@SERVER_IP 'VPS_PASSWORD'
+```
+
 Direct install on the VPS:
 
 ```bash
