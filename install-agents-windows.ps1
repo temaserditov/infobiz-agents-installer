@@ -11,7 +11,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
   $powershell64 = Join-Path $env:WINDIR "Sysnative\WindowsPowerShell\v1.0\powershell.exe"
   if (Test-Path $powershell64) {
     Write-Host "Перезапускаю установщик в 64-bit PowerShell..." -ForegroundColor Gray
-    & $powershell64 -NoProfile -ExecutionPolicy Bypass -Command "iex (irm '$SelfUrl?cb=force64')"
+    & $powershell64 -NoProfile -ExecutionPolicy Bypass -Command "iex (irm '${SelfUrl}?cb=force64')"
     exit $LASTEXITCODE
   }
 }
