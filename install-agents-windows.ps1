@@ -130,6 +130,7 @@ if ($Server -notmatch "@") {
 }
 
 $ssh = Ensure-OpenSsh
+$debugLog = Join-Path $env:TEMP ("infobiz-agents-ssh-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".log")
 
 $remote = @'
 STUDENT_UI=1 VERSION='0.1.0' BASE_URL='https://github.com/temaserditov/infobiz-agents-installer/releases/download/v0.1.0' bash -lc 'tmp=/tmp/install-vps-infobiz-agents.sh; curl -fsSL https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/install-vps-infobiz-agents.sh -o $tmp; chmod +x $tmp; $tmp'
@@ -147,10 +148,18 @@ Write-Host ""
   -o PubkeyAuthentication=no `
   -o PreferredAuthentications=keyboard-interactive,password `
   -o NumberOfPasswordPrompts=3 `
+  -E $debugLog `
   $Server `
   $remote
 
 if ($LASTEXITCODE -ne 0) {
+  Write-Host ""
+  Write-Host "Диагностический лог SSH: $debugLog" -ForegroundColor Gray
+  if (Test-Path $debugLog) {
+    Select-String -Path $debugLog -Pattern "Authentications|Permission denied|Offering|Next authentication|keyboard-interactive|password|Connection established|Authenticating to" -ErrorAction SilentlyContinue |
+      Select-Object -Last 20 |
+      ForEach-Object { Write-Host $_.Line -ForegroundColor DarkGray }
+  }
   Write-Host ""
   Write-Host "Встроенный Windows SSH не подключился. Пробую запасной режим." -ForegroundColor Yellow
   $plinkExit = Invoke-PlinkInstall -Target $Server -RemoteCommand $remote
