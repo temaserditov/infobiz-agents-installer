@@ -5,6 +5,16 @@ param(
 
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$SelfUrl = "https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/install-agents-windows.ps1"
+
+if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) {
+  $powershell64 = Join-Path $env:WINDIR "Sysnative\WindowsPowerShell\v1.0\powershell.exe"
+  if (Test-Path $powershell64) {
+    Write-Host "Перезапускаю установщик в 64-bit PowerShell..." -ForegroundColor Gray
+    & $powershell64 -NoProfile -ExecutionPolicy Bypass -Command "iex (irm '$SelfUrl?cb=force64')"
+    exit $LASTEXITCODE
+  }
+}
 
 function Write-Step {
   param([string]$Message)
