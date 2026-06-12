@@ -82,3 +82,39 @@ Then publish:
 BASE_URL="https://github.com/USER/REPO/releases/download/v0.1.0" \
   /bin/zsh -c "$(curl -fsSL https://raw.githubusercontent.com/USER/REPO/main/install-infobiz-agents.sh)"
 ```
+
+## VPS install
+
+Recommended VPS:
+
+- Ubuntu 24.04 LTS or Ubuntu 22.04 LTS
+- x86_64 / amd64
+- 4 vCPU, 8 GB RAM, 80 GB SSD/NVMe
+- public IPv4
+
+Remote install from a local terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/install-vps-remote.sh | bash -s -- root@SERVER_IP
+```
+
+Direct install on the VPS:
+
+```bash
+VERSION="0.1.0" \
+BASE_URL="https://github.com/temaserditov/infobiz-agents-installer/releases/download/v0.1.0" \
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/install-vps-infobiz-agents.sh)"
+```
+
+The VPS installer creates these agents:
+
+- `Гермес` (`default`)
+- `Дизайнер` (`designer`)
+- `Копирайтер` (`copywriter`)
+- `Маркетолог` (`marketer`)
+- `Продюсер` (`producer`)
+- `Технарь` (`tech`)
+
+WebShell is exposed as `http://SERVER_IP:8787/?token=...` and protected by a
+generated token. Agents use the internal local API
+`http://127.0.0.1:8787`.

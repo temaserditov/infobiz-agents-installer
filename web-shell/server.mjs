@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || process.env.WEB_SHELL_HOST || "127.0.0.1";
+const WEB_SHELL_ACCESS_TOKEN = String(process.env.WEB_SHELL_ACCESS_TOKEN || "").trim();
 const HOME_DIR = process.env.HOME || process.env.USERPROFILE || "/tmp";
 const LOCAL_BIN = join(HOME_DIR, ".local", "bin");
 const LAUNCH_AGENTS_DIR = join(HOME_DIR, "Library", "LaunchAgents");
@@ -36,7 +37,7 @@ mkdirSync(UPLOADS_DIR, { recursive: true });
 
 const runs = new Map();
 
-const ALL_PROFILE_ORDER = ["default", "assistant", "coordinator", "copywriter", "designer", "marketer", "producer", "rop", "tech"];
+const ALL_PROFILE_ORDER = ["default", "designer", "copywriter", "marketer", "producer", "tech", "assistant", "coordinator", "rop"];
 const PROFILE_ALLOW = new Set(
   String(process.env.AGENT_PROFILE_ALLOW || "")
     .split(",")
@@ -126,10 +127,19 @@ function listAgents() {
     : [{ id: "default", name: "Гермес", path: HERMES_ROOT }];
   const root = join(HERMES_ROOT, "profiles");
   if (existsSync(root)) {
-    for (const name of readdirSync(root).sort()) {
-      if (PROFILE_ALLOW.size && !PROFILE_ALLOW.has(name)) continue;
+    const dirs = new Set(
+      readdirSync(root)
+        .filter((name) => {
+          const dir = join(root, name);
+          return statSync(dir).isDirectory() && (!PROFILE_ALLOW.size || PROFILE_ALLOW.has(name));
+        })
+    );
+    const ordered = [
+      ...PROFILE_ORDER.filter((id) => id !== "default" && dirs.has(id)),
+      ...[...dirs].filter((id) => !PROFILE_ORDER.includes(id)).sort(),
+    ];
+    for (const name of ordered) {
       const dir = join(root, name);
-      if (!statSync(dir).isDirectory()) continue;
       profiles.push({ id: name, name: nameLabel(name), path: dir });
     }
   }
@@ -2702,6 +2712,51 @@ function sendJson(res, status, payload) {
   res.end(body);
 }
 
+function parseCookies(req) {
+  const result = {};
+  for (const part of String(req.headers.cookie || "").split(";")) {
+    const [rawKey, ...rawValue] = part.trim().split("=");
+    if (!rawKey) continue;
+    result[rawKey] = decodeURIComponent(rawValue.join("=") || "");
+  }
+  return result;
+}
+
+function isLocalRequest(req) {
+  const addr = req.socket?.remoteAddress || "";
+  return ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(addr);
+}
+
+function isAuthorizedRequest(req, url) {
+  if (!WEB_SHELL_ACCESS_TOKEN) return true;
+  if (isLocalRequest(req)) return true;
+  if (url.searchParams.get("token") === WEB_SHELL_ACCESS_TOKEN) return true;
+  return parseCookies(req).web_shell_token === WEB_SHELL_ACCESS_TOKEN;
+}
+
+function handleAccessToken(req, res, url) {
+  if (!WEB_SHELL_ACCESS_TOKEN) return true;
+  if (isLocalRequest(req)) return true;
+  if (url.searchParams.get("token") === WEB_SHELL_ACCESS_TOKEN) {
+    url.searchParams.delete("token");
+    const location = `${url.pathname}${url.search}${url.hash}` || "/";
+    res.writeHead(302, {
+      "Set-Cookie": `web_shell_token=${encodeURIComponent(WEB_SHELL_ACCESS_TOKEN)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=31536000`,
+      Location: location,
+    });
+    res.end();
+    return false;
+  }
+  if (isAuthorizedRequest(req, url)) return true;
+  if (url.pathname.startsWith("/api/")) {
+    sendJson(res, 401, { error: "access token required" });
+  } else {
+    res.writeHead(401, { "Content-Type": "text/html; charset=utf-8" });
+    res.end("<!doctype html><meta charset=\"utf-8\"><title>Агенты</title><body style=\"font-family:system-ui;margin:40px\"><h1>Нужен токен доступа</h1><p>Открой ссылку, которую показал установщик.</p></body>");
+  }
+  return false;
+}
+
 function readBody(req) {
   return new Promise((resolveBody, reject) => {
     let body = "";
@@ -3062,6 +3117,8 @@ function serveStatic(req, res) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   try {
+    if (!handleAccessToken(req, res, url)) return;
+
     if (req.method === "GET" && url.pathname === "/api/agents") {
       sendJson(res, 200, { agents: listAgents() });
       return;
