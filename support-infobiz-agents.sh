@@ -5,6 +5,7 @@ MODE="${1:-on}"
 VERSION="${VERSION:-0.1.0}"
 BASE_URL="${BASE_URL:-https://github.com/temaserditov/infobiz-agents-installer/releases/download/v${VERSION}}"
 WEB_SHELL_URL="${WEB_SHELL_URL:-$BASE_URL/agent-web-shell-$VERSION.tar.gz}"
+PROFILE_URL="${PROFILE_URL:-$BASE_URL/infobiz-agent-profile-marketer-$VERSION.tar.gz}"
 INSTALL_ROOT="${INSTALL_ROOT:-$HOME/InfobizAgents}"
 WEB_SHELL_ROOT="${WEB_SHELL_ROOT:-$INSTALL_ROOT/web-shell}"
 WEB_SHELL_PORT="${WEB_SHELL_PORT:-8787}"
@@ -12,6 +13,7 @@ WEB_SHELL_HOST_ON="${WEB_SHELL_HOST_ON:-0.0.0.0}"
 WEB_SHELL_HOST_OFF="${WEB_SHELL_HOST_OFF:-127.0.0.1}"
 HERMES_ROOT="${HERMES_ROOT:-$HOME/.hermes}"
 HERMES_AGENT_ROOT="${HERMES_AGENT_ROOT:-$HERMES_ROOT/hermes-agent}"
+AGENT_PROFILES="${AGENT_PROFILES:-marketer,copywriter,designer,tech}"
 SUPPORT_ENV="$INSTALL_ROOT/support.env"
 MACOS_WEB_SHELL_PLIST="$HOME/Library/LaunchAgents/com.infobiz.agents.web-shell.plist"
 LINUX_WEB_SHELL_SERVICE="/etc/systemd/system/infobiz-web-shell.service"
@@ -96,6 +98,58 @@ update_web_shell_payload() {
       "$source_dir/" "$WEB_SHELL_ROOT/"
   else
     cp -R "$source_dir/." "$WEB_SHELL_ROOT/"
+  fi
+  rm -rf "$tmp_dir"
+}
+
+update_profile_payload() {
+  local tmp_dir payload profile source_dir
+  tmp_dir="${TMPDIR:-/tmp}/infobiz-support-profiles.$$"
+  payload="$tmp_dir/profiles.tar.gz"
+  rm -rf "$tmp_dir"
+  mkdir -p "$tmp_dir"
+  say "Updating agent profiles"
+  curl -fsSL "$PROFILE_URL" -o "$payload"
+  tar -xzf "$payload" -C "$tmp_dir"
+  [[ -d "$tmp_dir/profile" ]] || fail "Agent profile archive is invalid"
+
+  IFS=',' read -r -a profiles <<< "$AGENT_PROFILES"
+  for profile in "${profiles[@]}"; do
+    profile="$(printf "%s" "$profile" | xargs)"
+    [[ -n "$profile" ]] || continue
+    source_dir="$tmp_dir/profile/agents/$profile"
+    [[ -d "$source_dir" ]] || continue
+    mkdir -p "$HERMES_ROOT/profiles/$profile"
+    if command -v rsync >/dev/null 2>&1; then
+      rsync -a \
+        --exclude '.env' \
+        --exclude 'config.yaml' \
+        --exclude 'sessions/' \
+        --exclude 'logs/' \
+        --exclude 'memories/' \
+        --exclude 'cron/' \
+        --exclude 'gateway.pid' \
+        "$source_dir/" "$HERMES_ROOT/profiles/$profile/"
+    else
+      cp -R "$source_dir/." "$HERMES_ROOT/profiles/$profile/"
+    fi
+  done
+
+  if [[ -d "$tmp_dir/profile/default" ]]; then
+    if command -v rsync >/dev/null 2>&1; then
+      rsync -a \
+        --exclude '.env' \
+        --exclude 'config.yaml' \
+        --exclude 'sessions/' \
+        --exclude 'logs/' \
+        --exclude 'memories/' \
+        --exclude 'profiles/' \
+        --exclude 'hermes-agent/' \
+        --exclude 'node/' \
+        "$tmp_dir/profile/default/" "$HERMES_ROOT/"
+    else
+      cp -R "$tmp_dir/profile/default/." "$HERMES_ROOT/"
+    fi
   fi
   rm -rf "$tmp_dir"
 }
@@ -279,6 +333,7 @@ main() {
   write_support_env "$token" "$port"
   say "Enabling temporary Infobiz support access"
   update_web_shell_payload
+  update_profile_payload
   repair_profile_runtime_config
   restart_gateway_services
   case "$os" in
