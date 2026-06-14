@@ -1216,7 +1216,7 @@ async function loadChatMessages(sessionId, { silent = false, agentId = state.act
   if (session.missing) {
     addMessage("assistant", "В индексе Hermes есть эта сессия, но файл сообщений уже отсутствует или был архивирован.", "warning");
   }
-  for (const message of data.messages || []) {
+  for (const message of dedupeMessages(data.messages || [])) {
     if (message.role === "tool") {
       addStatusEvent({ type: message.kind || "tool", ts: Date.now(), text: message.text });
     } else {
@@ -1231,6 +1231,44 @@ async function loadChatMessages(sessionId, { silent = false, agentId = state.act
 
 function activeConversationKey() {
   return state.activeGroupId ? `group:${state.activeGroupId}` : `agent:${state.active || ""}`;
+}
+
+function messageFingerprint(role, text, extraClass = "", sender = null) {
+  const senderId = sender?.id || "";
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  return `${role || ""}|${extraClass || ""}|${senderId}|${normalized}`;
+}
+
+function lastMessageRow() {
+  const rows = [...els.messages.querySelectorAll(".msg-row:not(.typing):not(.tool-status)")];
+  return rows[rows.length - 1] || null;
+}
+
+function isRecentDuplicateMessage(role, text, extraClass = "", sender = null) {
+  const last = lastMessageRow();
+  if (!last) return false;
+  const fingerprint = messageFingerprint(role, text, extraClass, sender);
+  if (!fingerprint.endsWith("|")) {
+    const ts = Number(last.dataset.ts || 0);
+    if (last.dataset.fingerprint === fingerprint && Date.now() - ts < 15000) return true;
+  }
+  return false;
+}
+
+function dedupeMessages(messages) {
+  const result = [];
+  let last = "";
+  for (const message of messages || []) {
+    if (!message || typeof message !== "object") continue;
+    const role = message.role || "";
+    const kind = message.kind || "";
+    const text = message.text || "";
+    const key = `${role}|${kind}|${String(text).replace(/\s+/g, " ").trim()}`;
+    if (key === last) continue;
+    last = key;
+    result.push(message);
+  }
+  return result;
 }
 
 function messageCacheKey(agentId = state.active, chatId = state.activeChatId) {
@@ -2301,10 +2339,13 @@ function senderColor(id) {
 }
 
 function addMessage(role, text, extraClass = "", sender = null) {
+  if (isRecentDuplicateMessage(role, text, extraClass, sender)) return lastMessageRow();
   const side = bubbleSide(role);
   const row = document.createElement("div");
   row.className = `msg-row ${side}${sender ? " with-sender" : ""}`;
   row.dataset.side = side;
+  row.dataset.ts = String(Date.now());
+  row.dataset.fingerprint = messageFingerprint(role, text, extraClass, sender);
 
   if (sender) {
     const av = document.createElement("div");
@@ -2344,6 +2385,13 @@ function addMessage(role, text, extraClass = "", sender = null) {
 
 function setMessageText(row, text) {
   if (row?.__text) row.__text.textContent = text;
+  if (row) {
+    const bubble = row.querySelector(".bubble");
+    const role = bubble?.classList.contains("user") ? "user" : "assistant";
+    const extraClass = bubble?.classList.contains("warning") ? "warning" : bubble?.classList.contains("error") ? "error" : "";
+    row.dataset.ts = String(Date.now());
+    row.dataset.fingerprint = messageFingerprint(role, text, extraClass);
+  }
   scrollMessages();
 }
 
