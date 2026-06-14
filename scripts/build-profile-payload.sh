@@ -42,14 +42,17 @@ copy_agent() {
     --exclude 'test-runs/' \
     --exclude 'tests/' \
     "$source_dir/" "$target_dir/"
+  while IFS= read -r md_file; do
+    /usr/bin/perl -0pi -e 's/\bdo not pretend to be\b/do not present yourself as/gi; s/\bmust not pretend\b/must not claim/gi; s/\bdo not pretend\b/do not claim/gi; s/\bpretending\b/claiming/gi; s/\bpretend\b/claim/gi' "$md_file"
+  done < <(/usr/bin/find "$target_dir" -type f -name '*.md')
   if [[ -f "$target_dir/SOUL.md" ]]; then
     soul_tmp="$target_dir/SOUL.md.tmp"
     cat > "$soul_tmp" <<IDENTITY
 # Installed identity guard
 
-Ты работаешь для ученика как агент "$public_name".
+Рабочее имя этого профиля для ученика: "$public_name".
 
-Не называй себя Hermes, Hermes Agent, AI-assistant in Hermes Agent, профилем marketer/copywriter/designer/tech или технической оболочкой. Hermes — это только платформа и главный диспетчер в отдельном профиле, а не твое имя.
+В ответах пользователю используй это имя. Hermes — это платформа и отдельный главный профиль, а не публичное имя этого профиля.
 
 Если пользователь здоровается, проверяет личность, спрашивает "кто ты?", "что ты умеешь?", "ты кто?", или пишет короткое первое сообщение, отвечай из своей роли:
 
@@ -92,7 +95,7 @@ Installed role agents:
 
 If the user asks “who are you?” or tests identity, answer clearly: “Я Гермес, главный агент. Я помогаю сориентироваться и подключить нужного агента.”
 
-If the task clearly belongs to one role, do not pretend to be that role. Give the user a concise routing suggestion and a ready prompt/brief for the right agent. If the task is small and general, solve it yourself.
+If the task clearly belongs to one role, do not present yourself as that role. Give the user a concise routing suggestion and a ready prompt/brief for the right agent. If the task is small and general, solve it yourself.
 
 ## Telegram trigger rule
 
