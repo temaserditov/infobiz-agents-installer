@@ -5,7 +5,9 @@ INSTALL_ROOT="${INSTALL_ROOT:-$HOME/InfobizAgents}"
 HERMES_ROOT="${HERMES_ROOT:-$HOME/.hermes}"
 HERMES_AGENT_ROOT="$HERMES_ROOT/hermes-agent"
 DESIGNER_ROOT="$HERMES_ROOT/profiles/designer"
+TECH_ROOT="$HERMES_ROOT/profiles/tech"
 HERMES_IMAGE_REFERENCE_PATCH_URL="${HERMES_IMAGE_REFERENCE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-image-reference.py}"
+TECH_NO_CODE_PATCH_URL="${TECH_NO_CODE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-tech-no-code-defaults.py}"
 
 say() {
   printf "==> %s\n" "$1"
@@ -129,10 +131,17 @@ patch_hermes_image_reference_support() {
   "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" "$HERMES_AGENT_ROOT"
 }
 
+patch_tech_no_code_defaults() {
+  local patcher="${TMPDIR:-/tmp}/patch-tech-no-code-defaults.py"
+  curl -fsSL "$TECH_NO_CODE_PATCH_URL" -o "$patcher"
+  "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" "$TECH_ROOT"
+}
+
 [[ "$(uname -s)" == "Linux" ]] || fail "This updater supports Linux VPS only."
 [[ -d "$HERMES_AGENT_ROOT" ]] || fail "Hermes is not installed. Run the full installer first."
 [[ -x "$HERMES_AGENT_ROOT/venv/bin/python" ]] || fail "Hermes Python venv is missing. Run the full installer first."
 [[ -d "$DESIGNER_ROOT" ]] || fail "Designer profile is not installed. Run the full installer first."
+[[ -d "$TECH_ROOT" ]] || fail "Tech profile is not installed. Run the full installer first."
 
 say "Patching designer image generation rules"
 patch_markdown_file "$DESIGNER_ROOT/SOUL.md" "SOUL.md"
@@ -142,12 +151,16 @@ patch_markdown_file "$DESIGNER_ROOT/skills/gpt-image-2-generation-basic/SKILL.md
 say "Patching Hermes image reference support"
 patch_hermes_image_reference_support
 
+say "Patching tech no-code defaults"
+patch_tech_no_code_defaults
+
 say "Configuring GPT-Image 2 High"
 configure_designer_image_generation
 
 say "Restarting designer gateway"
 if command -v systemctl >/dev/null 2>&1; then
   systemctl restart infobiz-hermes-gateway-designer.service >/dev/null 2>&1 || true
+  systemctl restart infobiz-hermes-gateway-tech.service >/dev/null 2>&1 || true
   systemctl restart infobiz-web-shell.service >/dev/null 2>&1 || true
 fi
 

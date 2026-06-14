@@ -166,6 +166,51 @@ if errors:
 print("Designer image generation contract looks direct.")
 PY
 
+say "Checking tech no-code default route"
+python3 - "$PAYLOAD" <<'PY'
+import sys
+from pathlib import Path
+
+payload = Path(sys.argv[1])
+files = [
+    payload / "agents" / "tech" / "SOUL.md",
+    payload / "agents" / "tech" / "AGENTS.md",
+    payload / "agents" / "tech" / "COMMANDS.md",
+    payload / "agents" / "tech" / "skills" / "no-code-mvp-stack" / "SKILL.md",
+    payload / "agents" / "tech" / "skills" / "chatplace-basic-setup" / "SKILL.md",
+    payload / "agents" / "tech" / "knowledge" / "04-payments.md",
+]
+
+errors = []
+joined = ""
+for path in files:
+    if not path.exists():
+        errors.append(f"missing {path.relative_to(payload)}")
+        continue
+    joined += "\n" + path.read_text(encoding="utf-8", errors="ignore").lower()
+
+required = [
+    "infobiz no-code default route",
+    "telegram -> chatplace",
+    "prodamus",
+    "python",
+    "postgresql",
+    "do not propose python",
+    "do not propose postgresql",
+    "chatplace is the canonical first route",
+    "prodamus is the default payment route",
+]
+for needle in required:
+    if needle not in joined:
+        errors.append(f"tech no-code contract missing {needle!r}")
+
+if errors:
+    print("\n".join(errors))
+    raise SystemExit(1)
+
+print("Tech no-code defaults look sane.")
+PY
+
 if [[ "${LIVE_SMOKE:-0}" == "1" ]]; then
   say "Running optional live greeting smoke test"
   PROFILE="${PROFILE:-marketer}"

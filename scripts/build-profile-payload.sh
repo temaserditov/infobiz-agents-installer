@@ -71,6 +71,8 @@ copy_agent "ai-copywriter" "copywriter" "Copywriter" "Копирайтер"
 copy_agent "ai-designer" "designer" "Designer" "Дизайнер"
 copy_agent "ai-tech" "tech" "Tech Agent" "Технарь"
 
+"$SCRIPT_DIR/patch-tech-no-code-defaults.py" "$PAYLOAD_DIR/agents/tech"
+
 cat > "$PAYLOAD_DIR/default/SOUL.md" <<'SOUL'
 # SOUL.md — Hermes
 

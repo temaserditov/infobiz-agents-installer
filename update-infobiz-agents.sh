@@ -8,8 +8,10 @@ INSTALL_ROOT="${INSTALL_ROOT:-$HOME/InfobizAgents}"
 HERMES_ROOT="${HERMES_ROOT:-$HOME/.hermes}"
 HERMES_AGENT_ROOT="$HERMES_ROOT/hermes-agent"
 DESIGNER_ROOT="$HERMES_ROOT/profiles/designer"
+TECH_ROOT="$HERMES_ROOT/profiles/tech"
 LOG_FILE="$INSTALL_ROOT/update.log"
 HERMES_IMAGE_REFERENCE_PATCH_URL="${HERMES_IMAGE_REFERENCE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-image-reference.py}"
+TECH_NO_CODE_PATCH_URL="${TECH_NO_CODE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-tech-no-code-defaults.py}"
 
 say() {
   printf "==> %s\n" "$1"
@@ -134,6 +136,12 @@ patch_hermes_image_reference_support() {
   "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" "$HERMES_AGENT_ROOT"
 }
 
+patch_tech_no_code_defaults() {
+  local patcher="${TMPDIR:-/tmp}/patch-tech-no-code-defaults.py"
+  /usr/bin/curl -fsSL "$TECH_NO_CODE_PATCH_URL" -o "$patcher"
+  "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" "$TECH_ROOT"
+}
+
 restart_launch_agent() {
   local label="$1"
   local plist="$2"
@@ -150,6 +158,7 @@ restart_launch_agent() {
 [[ -d "$HERMES_AGENT_ROOT" ]] || fail "Hermes is not installed. Run the full installer first."
 [[ -x "$HERMES_AGENT_ROOT/venv/bin/python" ]] || fail "Hermes Python venv is missing. Run the full installer first."
 [[ -d "$DESIGNER_ROOT" ]] || fail "Designer profile is not installed. Run the full installer first."
+[[ -d "$TECH_ROOT" ]] || fail "Tech profile is not installed. Run the full installer first."
 
 /bin/mkdir -p "$INSTALL_ROOT"
 : > "$LOG_FILE"
@@ -163,12 +172,16 @@ patch_markdown_file "$DESIGNER_ROOT/skills/gpt-image-2-generation-basic/SKILL.md
 say "Patching Hermes image reference support"
 patch_hermes_image_reference_support >> "$LOG_FILE" 2>&1 || fail "Could not patch Hermes image reference support"
 
+say "Patching tech no-code defaults"
+patch_tech_no_code_defaults >> "$LOG_FILE" 2>&1 || fail "Could not patch tech no-code defaults"
+
 say "Configuring GPT-Image 2 High"
 configure_designer_image_generation >> "$LOG_FILE" 2>&1 || fail "Could not configure GPT-Image 2 High for designer"
 
 say "Restarting designer gateway"
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
 restart_launch_agent "ai.hermes.gateway-designer" "$LAUNCH_AGENTS/ai.hermes.gateway-designer.plist"
+restart_launch_agent "ai.hermes.gateway-tech" "$LAUNCH_AGENTS/ai.hermes.gateway-tech.plist"
 restart_launch_agent "com.infobiz.agents.web-shell" "$LAUNCH_AGENTS/com.infobiz.agents.web-shell.plist"
 
 say "Patch complete"
