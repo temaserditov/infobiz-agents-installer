@@ -789,6 +789,12 @@ function sessionFilePath(agentId, sessionId) {
   return join(profileDir(agentId), "sessions", `session_${id}.json`);
 }
 
+function sessionTranscriptPath(agentId, sessionId) {
+  const id = String(sessionId || "");
+  if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error("invalid session id");
+  return join(profileDir(agentId), "sessions", `${id}.jsonl`);
+}
+
 function listAgentChats(agentId) {
   const dir = profileDir(agentId);
   const sessionsDir = join(dir, "sessions");
@@ -799,7 +805,8 @@ function listAgentChats(agentId) {
 
   for (const entry of Object.values(index || {})) {
     if (!entry?.session_id) continue;
-    const path = join(sessionsDir, `session_${entry.session_id}.json`);
+    const legacyPath = join(sessionsDir, `session_${entry.session_id}.json`);
+    const transcriptPath = join(sessionsDir, `${entry.session_id}.jsonl`);
     byId.set(entry.session_id, {
       id: entry.session_id,
       sessionKey: entry.session_key || "",
@@ -811,13 +818,13 @@ function listAgentChats(agentId) {
       totalTokens: Number(entry.total_tokens || 0),
       suspended: Boolean(entry.suspended),
       freshReset: Boolean(entry.is_fresh_reset),
-      fileExists: existsSync(path),
+      fileExists: existsSync(legacyPath) || existsSync(transcriptPath),
       source: "index",
     });
   }
 
   const files = readdirSync(sessionsDir)
-    .filter((name) => /^session_[A-Za-z0-9_-]+\.json$/.test(name))
+    .filter((name) => /^session_[A-Za-z0-9_-]+\.json$/.test(name) || /^[A-Za-z0-9_-]+\.jsonl$/.test(name))
     .map((name) => {
       const path = join(sessionsDir, name);
       return { name, path, mtimeMs: statSync(path).mtimeMs };
@@ -826,7 +833,7 @@ function listAgentChats(agentId) {
     .slice(0, CHAT_HISTORY_LIMIT);
 
   for (const file of files) {
-    const id = file.name.replace(/^session_/, "").replace(/\.json$/, "");
+    const id = file.name.replace(/^session_/, "").replace(/\.json$/, "").replace(/\.jsonl$/, "");
     if (byId.has(id)) continue;
     const session = readJson(file.path, {});
     byId.set(id, {
@@ -918,7 +925,50 @@ function buildRunConversationHistory(agentId, sourceSessionId) {
 
 function sessionMessages(agentId, sessionId) {
   const path = sessionFilePath(agentId, sessionId);
+  const transcriptPath = sessionTranscriptPath(agentId, sessionId);
   if (!existsSync(path)) {
+    if (existsSync(transcriptPath)) {
+      const rows = readText(transcriptPath, "")
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => {
+          try {
+            return JSON.parse(line);
+          } catch {
+            return null;
+          }
+        })
+        .filter(Boolean);
+      const messages = rows
+        .map((message) => {
+          const role = String(message.role || "assistant");
+          const content = String(message.content || message.text || "");
+          if (!content.trim() || role === "system") return null;
+          return {
+            role: role === "user" ? "user" : "assistant",
+            kind: "message",
+            text: compactMessageText(content),
+          };
+        })
+        .filter(Boolean);
+      const stat = statSync(transcriptPath);
+      return {
+        session: {
+          id: sessionId,
+          model: "",
+          platform: "telegram",
+          startedAt: "",
+          updatedAt: new Date(stat.mtimeMs).toISOString(),
+          messageCount: rows.length,
+          shownMessages: messages.length,
+          path: transcriptPath,
+          missing: false,
+          source: "jsonl",
+        },
+        messages,
+      };
+    }
     return {
       session: {
         id: sessionId,

@@ -10,6 +10,7 @@ const state = {
   chats: [],
   activeChatId: null,
   activeChatByAgent: {},
+  messageCache: {},
   promptRouter: null,
   preflights: [],
   preflightStats: null,
@@ -883,9 +884,10 @@ async function loadAgentChats({ refreshMessages = true } = {}) {
   state.activeChatByAgent[agentId] = state.activeChatId;
   renderAgentChats();
   if (refreshMessages && state.activeChatId) {
+    restoreCachedMessages(agentId, state.activeChatId);
     await loadChatMessages(state.activeChatId, { silent: true, agentId });
   } else if (refreshMessages) {
-    clearMessagesForAgent(agentId);
+    if (!restoreCachedMessages(agentId, "")) clearMessagesForAgent(agentId);
   }
 }
 
@@ -1224,10 +1226,30 @@ async function loadChatMessages(sessionId, { silent = false, agentId = state.act
     }
   }
   closeStatusGroup();
+  saveActiveMessages();
 }
 
 function activeConversationKey() {
   return state.activeGroupId ? `group:${state.activeGroupId}` : `agent:${state.active || ""}`;
+}
+
+function messageCacheKey(agentId = state.active, chatId = state.activeChatId) {
+  if (state.activeGroupId) return `group:${state.activeGroupId}`;
+  return `agent:${agentId || ""}:${chatId || "draft"}`;
+}
+
+function saveActiveMessages() {
+  if (state.activeGroupId || !state.active) return;
+  state.messageCache[messageCacheKey()] = els.messages.innerHTML;
+}
+
+function restoreCachedMessages(agentId = state.active, chatId = state.activeChatId) {
+  const html = state.messageCache[messageCacheKey(agentId, chatId)];
+  if (!html) return false;
+  els.messages.innerHTML = html;
+  closeStatusGroup();
+  scrollMessages();
+  return true;
 }
 
 function clearMessagesForAgent(agentId) {
@@ -1239,6 +1261,7 @@ function clearMessagesForAgent(agentId) {
 
 function selectAgent(agentId) {
   if (!agentId || state.active === agentId && !state.activeGroupId) return;
+  saveActiveMessages();
   if (state.eventSource) {
     state.eventSource.close();
     state.eventSource = null;
@@ -1247,9 +1270,11 @@ function selectAgent(agentId) {
   state.activeGroupId = null;
   state.activeChatId = state.activeChatByAgent[agentId] || null;
   state.chats = [];
-  els.messages.innerHTML = "";
-  closeStatusGroup();
-  addInlineEvent({ type: "chat.loading", ts: Date.now(), status: "Загружаю чат агента…" });
+  if (!restoreCachedMessages(agentId, state.activeChatId)) {
+    els.messages.innerHTML = "";
+    closeStatusGroup();
+    addInlineEvent({ type: "chat.loading", ts: Date.now(), status: "Загружаю чат агента…" });
+  }
   updateActive();
   renderAgents();
   loadAgentChats().catch((error) => {

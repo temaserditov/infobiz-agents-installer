@@ -21,6 +21,7 @@ mkdir -p "$PAYLOAD_DIR/agents" "$PAYLOAD_DIR/default" "$PAYLOAD_DIR/skills" "$OU
 copy_agent() {
   local source_name="$1"
   local target_name="$2"
+  local role_name="$3"
   local source_dir="$AGENT_PRODUCT_SOURCE/agents/$source_name"
   local target_dir="$PAYLOAD_DIR/agents/$target_name"
   if [[ ! -d "$source_dir" ]]; then
@@ -39,12 +40,22 @@ copy_agent() {
     --exclude 'test-runs/' \
     --exclude 'tests/' \
     "$source_dir/" "$target_dir/"
+  if [[ -f "$target_dir/SOUL.md" ]]; then
+    cat >> "$target_dir/SOUL.md" <<IDENTITY
+
+## Installed identity guard
+
+You are installed as: $role_name.
+
+If the user greets you, tests your identity, asks "who are you?", or sends a very short first message, answer from this role. Do not introduce yourself as Hermes. Hermes is only the main dispatcher agent in the default profile; you are the $role_name profile.
+IDENTITY
+  fi
 }
 
-copy_agent "ai-marketer-for-expert" "marketer"
-copy_agent "ai-copywriter" "copywriter"
-copy_agent "ai-designer" "designer"
-copy_agent "ai-tech" "tech"
+copy_agent "ai-marketer-for-expert" "marketer" "Marketer"
+copy_agent "ai-copywriter" "copywriter" "Copywriter"
+copy_agent "ai-designer" "designer" "Designer"
+copy_agent "ai-tech" "tech" "Tech Agent"
 
 cat > "$PAYLOAD_DIR/default/SOUL.md" <<'SOUL'
 # SOUL.md — Hermes
