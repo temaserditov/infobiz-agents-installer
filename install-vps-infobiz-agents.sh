@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-AGENT_PROFILES="${AGENT_PROFILES:-designer,copywriter,marketer,producer,tech}"
-AGENT_PROFILE_ALLOW="${AGENT_PROFILE_ALLOW:-default,designer,copywriter,marketer,producer,tech}"
+AGENT_PROFILES="${AGENT_PROFILES:-marketer,copywriter,designer,tech}"
+AGENT_PROFILE_ALLOW="${AGENT_PROFILE_ALLOW:-default,marketer,copywriter,designer,tech}"
 VERSION="${VERSION:-0.1.0}"
 BASE_URL="${BASE_URL:-https://github.com/temaserditov/infobiz-agents-installer/releases/download/v${VERSION}}"
 PROFILE_URL="${PROFILE_URL:-$BASE_URL/infobiz-agent-profile-marketer-$VERSION.tar.gz}"
@@ -306,11 +306,11 @@ PY
 install_profiles_and_skills() {
   local payload="$TMP_ROOT/profile.tar.gz"
   local workdir="$TMP_ROOT/profile"
-  local profile
+  local profile source_dir skill_count
   download_file "$PROFILE_URL" "$payload"
   mkdir -p "$workdir"
-  run_logged "Extracting agent skills" tar -xzf "$payload" -C "$workdir"
-  [[ -d "$workdir/profile/skills" ]] || fail "Profile payload is invalid"
+  run_logged "Extracting agent profiles" tar -xzf "$payload" -C "$workdir"
+  [[ -d "$workdir/profile/agents" || -d "$workdir/profile/skills" ]] || fail "Profile payload is invalid"
 
   mkdir -p "$HERMES_ROOT/profiles"
   IFS=',' read -r -a profiles <<< "$AGENT_PROFILES"
@@ -319,8 +319,22 @@ install_profiles_and_skills() {
     [[ -n "$profile" ]] || continue
     say "Creating profile: $profile"
     create_clean_profile "$profile"
-    mkdir -p "$HERMES_ROOT/profiles/$profile/skills"
-    rsync -a "$workdir/profile/skills/" "$HERMES_ROOT/profiles/$profile/skills/"
+    source_dir="$workdir/profile/agents/$profile"
+    if [[ -d "$source_dir" ]]; then
+      rsync -a \
+        --exclude '.env' \
+        --exclude 'config.yaml' \
+        --exclude 'sessions/' \
+        --exclude 'logs/' \
+        --exclude 'memories/' \
+        --exclude 'test-runs/' \
+        "$source_dir/" "$HERMES_ROOT/profiles/$profile/"
+    elif [[ -d "$workdir/profile/skills" ]]; then
+      mkdir -p "$HERMES_ROOT/profiles/$profile/skills"
+      rsync -a "$workdir/profile/skills/" "$HERMES_ROOT/profiles/$profile/skills/"
+    else
+      fail "No source files found for profile: $profile"
+    fi
     skill_count="$(find "$HERMES_ROOT/profiles/$profile/skills" -name 'SKILL.md' -type f | wc -l | tr -d ' ')"
     [[ "$skill_count" != "0" ]] || fail "No skills were installed for profile: $profile"
     printf "Installed %s skills for %s\n" "$skill_count" "$profile" >> "$LOG_FILE"
@@ -331,6 +345,18 @@ install_profiles_and_skills() {
   if [[ -d "$workdir/profile/skills/webshell-docs" ]]; then
     rm -rf "$HERMES_ROOT/skills/webshell-docs"
     rsync -a "$workdir/profile/skills/webshell-docs" "$HERMES_ROOT/skills/"
+  fi
+  if [[ -d "$workdir/profile/default" ]]; then
+    rsync -a \
+      --exclude '.env' \
+      --exclude 'config.yaml' \
+      --exclude 'sessions/' \
+      --exclude 'logs/' \
+      --exclude 'memories/' \
+      --exclude 'profiles/' \
+      --exclude 'hermes-agent/' \
+      --exclude 'node/' \
+      "$workdir/profile/default/" "$HERMES_ROOT/"
   fi
   write_profile_env "default"
   enable_telegram_platform "$HERMES_ROOT"
@@ -395,7 +421,11 @@ ENV
 
 install_gateway_systemd_services() {
   local profile service profile_arg
-  for profile in default designer copywriter marketer producer tech; do
+  if [[ "$AGENT_PROFILE_ALLOW" != *"producer"* ]]; then
+    systemctl disable --now infobiz-hermes-gateway-producer.service >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/infobiz-hermes-gateway-producer.service
+  fi
+  for profile in default marketer copywriter designer tech; do
     if [[ "$profile" == "default" ]]; then
       service="infobiz-hermes-gateway.service"
       profile_arg=""

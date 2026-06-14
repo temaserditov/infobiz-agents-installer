@@ -37,7 +37,7 @@ mkdirSync(UPLOADS_DIR, { recursive: true });
 
 const runs = new Map();
 
-const ALL_PROFILE_ORDER = ["default", "designer", "copywriter", "marketer", "producer", "tech", "assistant", "coordinator", "rop"];
+const ALL_PROFILE_ORDER = ["default", "marketer", "copywriter", "designer", "tech"];
 const PROFILE_ALLOW = new Set(
   String(process.env.AGENT_PROFILE_ALLOW || "")
     .split(",")
@@ -98,7 +98,6 @@ const ROLE_SKILL_POLICY = {
   copywriter: { allowed: ["telegram", "external-api", "obsidian"], discouraged: ["browser", "media-gen", "personal-data", "shell", "notion"] },
   designer: { deferred: true, allowed: ["media-gen", "obsidian", "notion", "external-api", "shell"], discouraged: [] },
   marketer: { allowed: ["telegram", "external-api", "media-gen", "obsidian", "notion"], discouraged: ["browser", "personal-data", "shell"] },
-  producer: { allowed: ["media-gen", "external-api"], discouraged: ["browser", "telegram", "personal-data", "shell", "obsidian", "notion"] },
   rop: { allowed: ["telegram", "personal-data", "external-api"], discouraged: ["browser", "media-gen", "shell", "obsidian", "notion"] },
   tech: { allowed: ["external-api", "shell"], discouraged: ["browser", "media-gen", "telegram", "personal-data", "obsidian", "notion"] },
 };
@@ -456,7 +455,6 @@ function nameLabel(id) {
     copywriter: "Копирайтер",
     designer: "Дизайнер",
     marketer: "Маркетолог",
-    producer: "Продакшн",
     rop: "Продажник",
     tech: "Технарь",
   };

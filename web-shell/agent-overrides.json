@@ -1,8 +1,7 @@
 {
   "default": { "name": "Гермес" },
-  "designer": { "name": "Дизайнер" },
-  "copywriter": { "name": "Копирайтер" },
   "marketer": { "name": "Маркетолог" },
-  "producer": { "name": "Продюсер" },
+  "copywriter": { "name": "Копирайтер" },
+  "designer": { "name": "Дизайнер" },
   "tech": { "name": "Технарь" }
 }

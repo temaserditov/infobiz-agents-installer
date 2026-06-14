@@ -26,14 +26,14 @@ does not call the official interactive installer:
 
 This avoids macOS Command Line Tools prompts on clean Macs.
 
-The profile release payload contains only custom skill directories under
-`profile/skills/`. The installer creates a clean Hermes profile from the
-official repository first, seeds standard Hermes bundled skills when available,
-and then overlays our custom skills. The shared `webshell-docs` skill is also
-copied into the default Hermes profile so both `Гермес` and `Маркетолог` can
-work with built-in documents. The payload does not ship auth, tokens, local
-config, SOUL.md, logs, sessions, memories, state databases, or runtime files
-from a developer machine.
+The profile release payload is built from the current agent product workspace:
+`~/.hermes-workspaces/marketer/agent-product`. The installer creates clean
+Hermes profiles from the official repository first, seeds standard Hermes
+bundled skills when available, and then overlays our curated agent folders.
+The shared `webshell-docs` skill is also copied into the default Hermes profile
+so `Гермес` and the role agents can work with built-in documents. The payload
+does not ship auth, tokens, local config, logs, sessions, memories, state
+databases, or runtime files from a developer machine.
 
 The web panel payload contains portable source only. It excludes local run
 history, approval history, snapshots, preflights, uploads, and personal
@@ -115,10 +115,9 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/temaserditov/infobiz-age
 The VPS installer creates these agents:
 
 - `Гермес` (`default`)
-- `Дизайнер` (`designer`)
-- `Копирайтер` (`copywriter`)
 - `Маркетолог` (`marketer`)
-- `Продюсер` (`producer`)
+- `Копирайтер` (`copywriter`)
+- `Дизайнер` (`designer`)
 - `Технарь` (`tech`)
 
 WebShell is exposed as `http://SERVER_IP:8787/?token=...` and protected by a
