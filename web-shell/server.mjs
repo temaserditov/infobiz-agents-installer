@@ -67,6 +67,11 @@ const RUN_HISTORY_MESSAGE_LIMIT = 14;
 const RUN_HISTORY_TOTAL_CHARS = 24_000;
 const RUN_HISTORY_MESSAGE_CHARS = 4_000;
 const MAX_WEB_PROMPT_CHARS = 50_000;
+const OPENAI_CODEX_MODEL_OPTIONS = (process.env.INFOBIZ_MODEL_OPTIONS || "gpt-5.5,gpt-5.3,gpt-5.2,gpt-5.1,gpt-5,gpt-4.1")
+  .split(",")
+  .map((item) => item.trim())
+  .filter(Boolean);
+const OPENAI_CODEX_MODEL_FALLBACK = process.env.INFOBIZ_MODEL_FALLBACK || "gpt-5.3";
 const WEB_FORBIDDEN_TOOLSETS = ["browser", "chatplace", "cronjob", "delegation", "kanban", "memory", "session_search", "todo", "tts"];
 const CONTEXT_BLOAT_PATHS = [
   join(HERMES_WORKSPACES_ROOT, "assistant", "projects", "open-design"),
@@ -1050,6 +1055,140 @@ function configSummary(agentId) {
   const model = config.match(/^model:\n\s+default:\s*([^\n]+)/m)?.[1]?.trim() || "";
   const contextLength = Number(config.match(/context_length:\s*(\d+)/)?.[1] || 0);
   return { maxTurns, idleMinutes, apiMaxRetries, provider, model, contextLength, disabledToolsets: disabled };
+}
+
+function modelSettings(agentId) {
+  const config = configSummary(agentId);
+  const env = readText(envPath(agentId), "");
+  const envModel = readEnvValue(env, "HERMES_INFERENCE_MODEL");
+  const manualModel = readEnvValue(env, "INFOBIZ_MODEL_MANUAL_SELECTED");
+  const autoModel = readEnvValue(env, "INFOBIZ_MODEL_AUTO_SELECTED");
+  const current = config.model || envModel || autoModel || OPENAI_CODEX_MODEL_FALLBACK;
+  return {
+    ok: existsSync(profileDir(agentId)),
+    profile: agentId,
+    name: nameLabel(agentId),
+    provider: config.provider || "openai-codex",
+    current,
+    model: current,
+    envModel,
+    autoModel,
+    manualModel,
+    manual: Boolean(manualModel),
+    gateway: agentDiagnostics(agentId).gateway.status,
+  };
+}
+
+function modelSettingsAll() {
+  const profiles = PROFILE_ORDER
+    .filter((id) => existsSync(profileDir(id)))
+    .map((id) => modelSettings(id));
+  return {
+    ok: true,
+    provider: "openai-codex",
+    options: OPENAI_CODEX_MODEL_OPTIONS,
+    fallback: OPENAI_CODEX_MODEL_FALLBACK,
+    profiles,
+    models: [...new Set(profiles.map((profile) => profile.model).filter(Boolean))].sort(),
+  };
+}
+
+function validateOpenAICodexModel(model) {
+  const value = String(model || "").trim();
+  if (!value) throw new Error("model is required");
+  if (!OPENAI_CODEX_MODEL_OPTIONS.includes(value)) {
+    throw new Error(`unsupported model: ${value}`);
+  }
+  return value;
+}
+
+function writeConfigModel(agentId, model) {
+  const configPath = join(profileDir(agentId), "config.yaml");
+  const code = String.raw`
+import re
+import sys
+from pathlib import Path
+
+try:
+    import yaml
+except Exception:
+    yaml = None
+
+path = Path(sys.argv[1])
+model = sys.argv[2]
+if yaml:
+    data = yaml.safe_load(path.read_text(encoding="utf-8", errors="ignore") if path.exists() else "") or {}
+    if not isinstance(data, dict):
+        data = {}
+    model_cfg = data.setdefault("model", {})
+    if not isinstance(model_cfg, dict):
+        model_cfg = {}
+        data["model"] = model_cfg
+    model_cfg["provider"] = "openai-codex"
+    model_cfg["default"] = model
+    model_cfg.setdefault("base_url", "https://chatgpt.com/backend-api/codex")
+    model_cfg.setdefault("context_length", 100000)
+    path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+else:
+    text = path.read_text(encoding="utf-8", errors="ignore") if path.exists() else ""
+    if re.search(r"(?m)^model:\s*$", text):
+        text = re.sub(r"(?m)^  default:\s*.*$", f"  default: {model}", text)
+        text = re.sub(r"(?m)^  provider:\s*.*$", "  provider: openai-codex", text)
+    else:
+        text = f"model:\n  default: {model}\n  provider: openai-codex\n  base_url: https://chatgpt.com/backend-api/codex\n  context_length: 100000\n\n" + text
+    path.write_text(text, encoding="utf-8")
+`;
+  const result = spawnSync(HERMES_PYTHON, ["-", configPath, model], {
+    input: code,
+    encoding: "utf8",
+    env: { ...process.env, HERMES_HOME: profileDir(agentId) },
+    cwd: HERMES_AGENT_ROOT,
+  });
+  if (result.status !== 0) {
+    throw new Error((result.stderr || result.stdout || "Could not write config model").trim());
+  }
+}
+
+function saveModelSetting(agentId, model) {
+  model = validateOpenAICodexModel(model);
+  const before = modelSettings(agentId);
+  const path = envPath(agentId);
+  let text = readText(path, "");
+  text = writeEnvValue(text, "HERMES_INFERENCE_PROVIDER", "openai-codex");
+  text = writeEnvValue(text, "HERMES_INFERENCE_MODEL", model);
+  text = writeEnvValue(text, "INFOBIZ_MODEL_MANUAL_SELECTED", model);
+  writeFileSync(path, text, { encoding: "utf8", mode: 0o600 });
+  writeConfigModel(agentId, model);
+  let restart = { ok: false, restarted: false };
+  try {
+    restart = restartAgentGateway(agentId);
+  } catch (error) {
+    restart = { ok: false, restarted: false, error: error.message || String(error) };
+  }
+  return {
+    ok: true,
+    profile: agentId,
+    name: nameLabel(agentId),
+    changed: before.model !== model || before.envModel !== model,
+    settings: modelSettings(agentId),
+    restart,
+  };
+}
+
+function saveModelSettings(models) {
+  if (!models || typeof models !== "object" || Array.isArray(models)) {
+    throw new Error("models object required");
+  }
+  const allowed = new Set(PROFILE_ORDER);
+  const results = [];
+  for (const [agentId, rawModel] of Object.entries(models)) {
+    if (!allowed.has(agentId)) continue;
+    const model = validateOpenAICodexModel(rawModel);
+    const before = modelSettings(agentId);
+    if (before.model === model && before.envModel === model) continue;
+    results.push(saveModelSetting(agentId, model));
+  }
+  return { ok: true, settings: modelSettingsAll(), results };
 }
 
 function listSkillNames(dir) {
@@ -2653,6 +2792,8 @@ function routeSummary() {
     { method: "GET", path: "/api/agents/:id/logs", group: "agent", description: "tail gateway.log профиля" },
     { method: "GET", path: "/api/agents/:id/telegram", group: "agent", description: "статус Telegram Bot Token без раскрытия токена" },
     { method: "POST", path: "/api/agents/:id/telegram", group: "agent", description: "сохраняет Telegram Bot Token и перезапускает gateway" },
+    { method: "GET", path: "/api/models", group: "settings", description: "доступные варианты модели и текущая модель по профилям" },
+    { method: "POST", path: "/api/models", group: "settings", description: "сохраняет модель по профилям и перезапускает измененные gateway" },
     { method: "POST", path: "/api/agents/:id/archive-sessions", group: "agent", description: "архивирует sessions без перезапуска gateway" },
     { method: "POST", path: "/api/agents/:id/reset-sessions", group: "agent", description: "архивирует sessions и перезапускает gateway профиля" },
     { method: "GET", path: "/api/runs", group: "runs", description: "история web runs" },
@@ -3601,6 +3742,17 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/telegram") {
       const body = await readBody(req);
       sendJson(res, 200, saveTelegramTokens(body.tokens || {}, body.allowedUsers || {}));
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/models") {
+      sendJson(res, 200, modelSettingsAll());
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/models") {
+      const body = await readBody(req);
+      sendJson(res, 200, saveModelSettings(body.models || {}));
       return;
     }
 

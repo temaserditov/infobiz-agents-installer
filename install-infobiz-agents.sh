@@ -556,7 +556,7 @@ write_profile_env() {
 TELEGRAM_BOT_TOKEN=''
 GATEWAY_ALLOW_ALL_USERS='true'
 HERMES_INFERENCE_PROVIDER='openai-codex'
-HERMES_INFERENCE_MODEL='gpt-5.5'
+HERMES_INFERENCE_MODEL='gpt-5.3'
 HERMES_HOME=$(shell_quote "$profile_root")
 PATH=$(shell_quote "$SHIM_DIR:$HERMES_ROOT/node/bin:$HERMES_AGENT_ROOT/venv/bin:$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin")
 INSTALL_NAME_TOOL=$(shell_quote "$SHIM_DIR/install_name_tool")
@@ -565,6 +565,121 @@ ENV
     printf "HERMES_KANBAN_DISPATCH_IN_GATEWAY='false'\n" >> "$profile_root/.env"
   fi
   chmod 600 "$profile_root/.env"
+}
+
+apply_best_available_model() {
+  local profiles="$AGENT_PROFILES"
+  say "Selecting best available OpenAI model"
+  HERMES_HOME="$HERMES_ROOT" \
+  HERMES_ROOT="$HERMES_ROOT" \
+  HERMES_AGENT_ROOT="$HERMES_AGENT_ROOT" \
+  AGENT_PROFILES="$profiles" \
+  HERMES_MODEL_CANDIDATES="${HERMES_MODEL_CANDIDATES:-gpt-5.5,gpt-5.3,gpt-5.2,gpt-5.1,gpt-5,gpt-4.1}" \
+  "$HERMES_AGENT_ROOT/venv/bin/python" <<'PY' >> "$LOG_FILE" 2>&1
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+try:
+    import yaml
+except Exception as exc:
+    print(f"PyYAML unavailable: {exc}")
+    yaml = None
+
+home = Path(os.environ["HERMES_ROOT"]).expanduser()
+agent_root = Path(os.environ["HERMES_AGENT_ROOT"]).expanduser()
+python = agent_root / "venv" / "bin" / "python"
+profiles = ["default"] + [p.strip() for p in os.environ.get("AGENT_PROFILES", "").split(",") if p.strip()]
+candidates = [m.strip() for m in os.environ.get("HERMES_MODEL_CANDIDATES", "").split(",") if m.strip()]
+prompt = "Return exactly MODEL_OK and nothing else."
+
+def profile_dir(profile: str) -> Path:
+    return home if profile == "default" else home / "profiles" / profile
+
+def env_quote(value: str) -> str:
+    return "'" + value.replace("'", "'\\''") + "'"
+
+def write_env_value(path: Path, key: str, value: str) -> None:
+    text = path.read_text(encoding="utf-8", errors="ignore") if path.exists() else ""
+    line = f"{key}={env_quote(value)}"
+    pattern = re.compile(rf"^{re.escape(key)}=.*$", re.M)
+    if pattern.search(text):
+        text = pattern.sub(line, text)
+    else:
+        text = text.rstrip() + "\n" + line + "\n"
+    path.write_text(text, encoding="utf-8")
+    path.chmod(0o600)
+
+def write_config_model(path: Path, model: str) -> None:
+    if yaml:
+        data = yaml.safe_load(path.read_text(encoding="utf-8", errors="ignore") if path.exists() else "") or {}
+        if not isinstance(data, dict):
+            data = {}
+        model_cfg = data.setdefault("model", {})
+        if not isinstance(model_cfg, dict):
+            model_cfg = {}
+            data["model"] = model_cfg
+        model_cfg["provider"] = "openai-codex"
+        model_cfg["default"] = model
+        model_cfg.setdefault("base_url", "https://chatgpt.com/backend-api/codex")
+        model_cfg.setdefault("context_length", 100000)
+        path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        return
+    text = path.read_text(encoding="utf-8", errors="ignore") if path.exists() else ""
+    if re.search(r"(?m)^model:\s*$", text):
+        text = re.sub(r"(?m)^  default:\s*.*$", f"  default: {model}", text)
+        text = re.sub(r"(?m)^  provider:\s*.*$", "  provider: openai-codex", text)
+    else:
+        text = f"model:\n  default: {model}\n  provider: openai-codex\n  base_url: https://chatgpt.com/backend-api/codex\n  context_length: 100000\n\n" + text
+    path.write_text(text, encoding="utf-8")
+
+def model_works(model: str) -> bool:
+    env = os.environ.copy()
+    env["HERMES_HOME"] = str(home)
+    env["HERMES_INFERENCE_PROVIDER"] = "openai-codex"
+    env["HERMES_INFERENCE_MODEL"] = model
+    try:
+        result = subprocess.run(
+            [str(python), "-m", "hermes_cli.main", "-z", prompt, "--provider", "openai-codex", "--model", model, "--ignore-rules"],
+            cwd=str(agent_root),
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=75,
+        )
+    except subprocess.TimeoutExpired:
+        print(f"model probe timeout: {model}")
+        return False
+    output = (result.stdout or "").strip()
+    print(f"model probe {model}: exit={result.returncode}, output={output[:240]!r}")
+    return result.returncode == 0 and "MODEL_OK" in output
+
+selected = None
+for model in candidates:
+    if model_works(model):
+        selected = model
+        break
+
+if not selected:
+    selected = os.environ.get("HERMES_MODEL_FALLBACK", "gpt-5.3")
+    print(f"No candidate probe succeeded; falling back to {selected}")
+else:
+    print(f"Selected OpenAI Codex model: {selected}")
+
+for profile in profiles:
+    root = profile_dir(profile)
+    if not root.exists():
+        continue
+    write_config_model(root / "config.yaml", selected)
+    write_env_value(root / ".env", "HERMES_INFERENCE_PROVIDER", "openai-codex")
+    write_env_value(root / ".env", "HERMES_INFERENCE_MODEL", selected)
+    write_env_value(root / ".env", "INFOBIZ_MODEL_AUTO_SELECTED", selected)
+
+print(f"INFOBIZ_SELECTED_MODEL={selected}")
+PY
 }
 
 disable_profile_kanban_dispatch() {
@@ -979,6 +1094,7 @@ install_profiles_and_skills "$profile_payload" "$workdir"
 say "OpenAI/Hermes authorization"
 printf "The installer will open the authorization page and copy the code when Hermes prints it.\n"
 run_hermes_auth || fail "OpenAI/Hermes authorization failed"
+apply_best_available_model || fail "Could not select an available OpenAI model"
 
 say "Installing Hermes gateway services"
 run_hermes gateway install --force >> "$LOG_FILE" 2>&1 || true

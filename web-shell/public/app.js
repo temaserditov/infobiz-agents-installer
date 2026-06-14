@@ -33,6 +33,7 @@ const state = {
   selfTest: null,
   inventory: null,
   modelMatrix: null,
+  modelSettings: null,
   configDrift: null,
   telegramSettings: null,
   routes: null,
@@ -115,6 +116,9 @@ const els = {
   settingsBtn: document.querySelector("#settingsBtn") || nullEl,
   settingsPanel: document.querySelector("#settingsPanel") || nullEl,
   settingsClose: document.querySelector("#settingsClose") || nullEl,
+  modelStatus: document.querySelector("#modelStatus") || nullEl,
+  modelAgentRows: document.querySelector("#modelAgentRows") || nullEl,
+  modelSave: document.querySelector("#modelSave") || nullEl,
   telegramStatus: document.querySelector("#telegramStatus") || nullEl,
   telegramAgentTokens: document.querySelector("#telegramAgentTokens") || nullEl,
   telegramToggle: document.querySelector("#telegramToggle") || nullEl,
@@ -767,6 +771,45 @@ async function loadTelegramSettings() {
   renderTelegramSettings();
 }
 
+async function loadModelSettings() {
+  const data = await api("/api/models");
+  state.modelSettings = data;
+  renderModelSettings();
+}
+
+function renderModelSettings(message = "") {
+  const settings = state.modelSettings;
+  const profiles = settings?.profiles || [];
+  const options = settings?.options || [];
+  const fallback = settings?.fallback || options[0] || "";
+  const manualCount = profiles.filter((profile) => profile.manual).length;
+  els.modelStatus.className = `settings-status ${profiles.length ? "ok" : ""}`;
+  els.modelStatus.textContent = message || (profiles.length
+    ? `Модель можно менять отдельно по агентам. Ручной выбор: ${manualCount} из ${profiles.length}`
+    : "Модели еще не найдены");
+  els.modelAgentRows.innerHTML = profiles.map((profile) => {
+    const current = profile.current || fallback;
+    const optionHtml = options.map((model) => `
+      <option value="${escapeHtml(model)}"${model === current ? " selected" : ""}>${escapeHtml(model)}</option>
+    `).join("");
+    return `
+      <div class="model-settings-row">
+        <span class="model-settings-meta">
+          <strong>${escapeHtml(profile.name || profile.profile)}</strong>
+          <small>${profile.manual ? "выбрана вручную" : "выбрана установщиком автоматически"}</small>
+          <small>сейчас: ${escapeHtml(current || "не задано")}</small>
+        </span>
+        <label class="model-select-field">
+          <span>Модель</span>
+          <select class="card-input model-select-input" data-agent="${escapeHtml(profile.profile)}">
+            ${optionHtml}
+          </select>
+        </label>
+      </div>
+    `;
+  }).join("");
+}
+
 function renderTelegramSettings(message = "") {
   const settings = state.telegramSettings;
   const profiles = settings?.profiles || [];
@@ -798,12 +841,19 @@ function renderTelegramSettings(message = "") {
 async function openSettings() {
   els.settingsPanel.hidden = false;
   els.telegramToggle.hidden = true;
+  renderModelSettings("Проверяю модели…");
   renderTelegramSettings("Проверяю Telegram…");
-  try {
-    await loadTelegramSettings();
-  } catch (error) {
+  const [modelResult, telegramResult] = await Promise.allSettled([
+    loadModelSettings(),
+    loadTelegramSettings(),
+  ]);
+  if (modelResult.status === "rejected") {
+    els.modelStatus.className = "settings-status error";
+    els.modelStatus.textContent = `Не удалось проверить модели: ${modelResult.reason.message}`;
+  }
+  if (telegramResult.status === "rejected") {
     els.telegramStatus.className = "settings-status error";
-    els.telegramStatus.textContent = `Не удалось проверить Telegram: ${error.message}`;
+    els.telegramStatus.textContent = `Не удалось проверить Telegram: ${telegramResult.reason.message}`;
   }
 }
 
@@ -846,6 +896,39 @@ async function saveTelegramSettings() {
     els.telegramStatus.textContent = `Не удалось сохранить Telegram: ${error.message}`;
   } finally {
     els.telegramSave.disabled = false;
+  }
+}
+
+async function saveModelSettings() {
+  els.modelSave.disabled = true;
+  els.modelStatus.className = "settings-status";
+  els.modelStatus.textContent = "Сохраняю модель и перезапускаю gateway…";
+  try {
+    const models = {};
+    for (const input of els.modelAgentRows.querySelectorAll(".model-select-input")) {
+      models[input.dataset.agent] = input.value.trim();
+    }
+    const data = await api("/api/models", {
+      method: "POST",
+      body: JSON.stringify({ models }),
+    });
+    const fresh = await api("/api/models");
+    state.modelSettings = fresh;
+    const results = data.results || [];
+    const restarted = results.filter((item) => item.restart?.restarted).length;
+    const failed = results.filter((item) => item.restart && !item.restart.restarted);
+    if (failed.length) {
+      els.modelStatus.className = "settings-status error";
+      els.modelStatus.textContent = `Модель сохранена, но gateway не перезапустился: ${failed.map((item) => item.name || item.profile).join(", ")}`;
+    } else {
+      renderModelSettings(results.length ? `Сохранено и перезапущено: ${restarted} из ${results.length}` : "Изменений нет");
+    }
+    await refreshSidebar();
+  } catch (error) {
+    els.modelStatus.className = "settings-status error";
+    els.modelStatus.textContent = `Не удалось сохранить модель: ${error.message}`;
+  } finally {
+    els.modelSave.disabled = false;
   }
 }
 
@@ -3307,6 +3390,7 @@ els.agentCard.addEventListener("click", (event) => {
 
 els.settingsBtn.addEventListener("click", openSettings);
 els.settingsClose.addEventListener("click", closeSettings);
+els.modelSave.addEventListener("click", saveModelSettings);
 els.telegramSave.addEventListener("click", saveTelegramSettings);
 els.settingsPanel.addEventListener("click", (event) => {
   if (event.target === els.settingsPanel) closeSettings();

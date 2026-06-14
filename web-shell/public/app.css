@@ -1876,6 +1876,58 @@ button:disabled {
   padding: 0 20px;
 }
 
+.model-settings-list {
+  display: grid;
+  gap: 12px;
+  padding: 0 20px;
+}
+
+.model-settings-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 150px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: end;
+}
+
+.model-settings-meta {
+  min-width: 0;
+}
+
+.model-settings-meta strong,
+.model-settings-meta small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-settings-meta strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.model-settings-meta small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.model-select-field {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.model-select-field span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.model-settings-list .card-input {
+  font-size: 14px;
+  min-width: 0;
+}
+
 .telegram-token-row {
   display: grid;
   grid-template-columns: minmax(110px, 150px) minmax(0, 1fr) minmax(0, 1fr);
@@ -1922,6 +1974,10 @@ button:disabled {
 }
 
 @media (max-width: 760px) {
+  .model-settings-row {
+    grid-template-columns: 1fr;
+  }
+
   .telegram-token-row {
     grid-template-columns: 1fr;
   }
