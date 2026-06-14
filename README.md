@@ -1,6 +1,33 @@
 # Infobiz Agents terminal installer
 
-Preferred student install path for macOS.
+Internal installer payload repository.
+
+Student-facing installs should go through the token gate on `school.serditov.ru`.
+Do not send raw GitHub or GitHub Releases commands to students.
+
+Windows student command:
+
+```powershell
+powershell -ExecutionPolicy Bypass -Command "iex (irm 'https://school.serditov.ru/install.ps1')"
+```
+
+Update:
+
+```powershell
+powershell -ExecutionPolicy Bypass -Command "iex (irm 'https://school.serditov.ru/update.ps1')"
+```
+
+Uninstall:
+
+```powershell
+powershell -ExecutionPolicy Bypass -Command "iex (irm 'https://school.serditov.ru/uninstall.ps1')"
+```
+
+The `school.serditov.ru` app verifies a one-time token and proxies private
+GitHub assets to the VPS through short-lived install sessions. The GitHub token
+must live only on the `school.serditov.ru` server.
+
+## Internal details
 
 The installer uses the official Hermes repository as the source of truth, but
 does not call the official interactive installer:
@@ -68,7 +95,11 @@ PROFILE_TARBALL="/path/to/infobiz-agent-profile-marketer-0.1.0.tar.gz" \
   ./install-infobiz-agents.sh
 ```
 
-## Hosted install command
+## Legacy direct GitHub install
+
+These commands are for internal debugging while this repo is still public. They
+will stop working for normal users after the repository is made private unless
+the caller has GitHub credentials. Use `school.serditov.ru` for students.
 
 Upload:
 
@@ -76,14 +107,14 @@ Upload:
 - `infobiz-agent-profile-marketer-0.1.0.tar.gz`
 - `agent-web-shell-0.1.0.tar.gz`
 
-Then publish:
+Direct macOS debug command:
 
 ```bash
 BASE_URL="https://github.com/USER/REPO/releases/download/v0.1.0" \
   /bin/zsh -c "$(curl -fsSL https://raw.githubusercontent.com/USER/REPO/main/install-infobiz-agents.sh)"
 ```
 
-## VPS install
+## VPS install internals
 
 Recommended VPS:
 
@@ -92,19 +123,19 @@ Recommended VPS:
 - 4 vCPU, 8 GB RAM, 80 GB SSD/NVMe
 - public IPv4
 
-Remote install from a local terminal:
+Legacy remote install from a local terminal:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/install-vps-remote.sh | bash -s -- root@SERVER_IP
 ```
 
-Remote install with password in one command:
+Legacy remote install with password in one command:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/install-vps-remote.sh | bash -s -- root@SERVER_IP 'VPS_PASSWORD'
 ```
 
-Direct install on the VPS:
+Legacy direct install on the VPS:
 
 ```bash
 VERSION="0.1.0" \
@@ -128,19 +159,19 @@ The default VPS installer UI is quiet: it shows a simple progress bar, pauses
 only for OpenAI device-code authorization, and prints the WebShell URL at the
 end. Set `STUDENT_UI=0` for verbose technical output.
 
-Remote uninstall from a local terminal:
+Legacy remote uninstall from a local terminal:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/uninstall-vps-remote.sh | bash -s -- root@SERVER_IP 'VPS_PASSWORD'
 ```
 
-Windows PowerShell installer:
+Legacy Windows PowerShell installer:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -Command "iex (irm 'https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/start-windows-installer.ps1')"
 ```
 
-Windows PowerShell update for an already installed VPS:
+Legacy Windows PowerShell update for an already installed VPS:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -Command "iex (irm 'https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/update-agents-windows.ps1')"
