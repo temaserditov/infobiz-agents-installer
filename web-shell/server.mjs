@@ -2611,7 +2611,7 @@ function supportBundle() {
       workspaceRoot: WORKSPACE_ROOT,
       obsidianVault: OBSIDIAN_VAULT,
       profileOrder: PROFILE_ORDER,
-      accessTokenEnabled: Boolean(WEB_SHELL_ACCESS_TOKEN),
+      authEnabled: Boolean(WEB_SHELL_ACCESS_TOKEN),
     },
     summaries: {
       agents: supportSection("agents", () => listAgents()),
