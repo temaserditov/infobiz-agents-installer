@@ -9,6 +9,7 @@ const state = {
   sessionPressure: null,
   chats: [],
   activeChatId: null,
+  activeChatByAgent: {},
   promptRouter: null,
   preflights: [],
   preflightStats: null,
@@ -364,13 +365,7 @@ function renderAgents() {
       </div>
     `;
     btn.addEventListener("click", () => {
-      state.active = agent.id;
-      state.activeGroupId = null;
-      state.activeChatId = null;
-      updateActive();
-      renderAgents();
-      loadAgentChats().catch((error) => addMessage("assistant", error.message, "error"));
-      loadDiagnostics();
+      selectAgent(agent.id);
     });
     els.agents.appendChild(btn);
   }
@@ -869,13 +864,21 @@ async function loadSessionPressure() {
 
 async function loadAgentChats() {
   if (!state.active) return;
-  const data = await api(`/api/agents/${state.active}/chats`);
+  const agentId = state.active;
+  const data = await api(`/api/agents/${agentId}/chats`);
+  if (state.active !== agentId) return;
   state.chats = data.chats || [];
+  state.activeChatId = state.activeChatByAgent[agentId] || null;
   if (!state.activeChatId || !state.chats.some((chat) => chat.id === state.activeChatId)) {
     state.activeChatId = state.chats[0]?.id || null;
   }
+  state.activeChatByAgent[agentId] = state.activeChatId;
   renderAgentChats();
-  if (state.activeChatId) await loadChatMessages(state.activeChatId, { silent: true });
+  if (state.activeChatId) {
+    await loadChatMessages(state.activeChatId, { silent: true, agentId });
+  } else {
+    clearMessagesForAgent(agentId);
+  }
 }
 
 async function loadHealth() {
@@ -1027,12 +1030,7 @@ function renderHealth() {
   `;
   for (const btn of els.systemHealth.querySelectorAll("[data-agent]")) {
     btn.addEventListener("click", () => {
-      state.active = btn.dataset.agent;
-      state.activeChatId = null;
-      updateActive();
-      renderAgents();
-      loadAgentChats().catch((error) => addMessage("assistant", error.message, "error"));
-      loadDiagnostics();
+      selectAgent(btn.dataset.agent);
     });
   }
 }
@@ -1153,12 +1151,7 @@ function renderSessionPressure() {
   `;
   for (const btn of els.sessionPressure.querySelectorAll("[data-agent]")) {
     btn.addEventListener("click", () => {
-      state.active = btn.dataset.agent;
-      state.activeChatId = null;
-      updateActive();
-      renderAgents();
-      loadAgentChats().catch((error) => addMessage("assistant", error.message, "error"));
-      loadDiagnostics();
+      selectAgent(btn.dataset.agent);
     });
   }
 }
@@ -1189,12 +1182,14 @@ function renderAgentChats() {
 }
 
 function getActiveChat() {
-  return state.chats.find((chat) => chat.id === state.activeChatId) || null;
+  return state.chats.find((chat) => chat.id === state.activeChatByAgent[state.active]) || null;
 }
 
-async function loadChatMessages(sessionId, { silent = false } = {}) {
-  const data = await api(`/api/agents/${state.active}/chats/${sessionId}/messages`);
+async function loadChatMessages(sessionId, { silent = false, agentId = state.active } = {}) {
+  const data = await api(`/api/agents/${agentId}/chats/${sessionId}/messages`);
+  if (state.active !== agentId) return;
   state.activeChatId = sessionId;
+  state.activeChatByAgent[agentId] = sessionId;
   renderAgentChats();
   els.messages.innerHTML = "";
   closeStatusGroup();
@@ -1221,6 +1216,38 @@ async function loadChatMessages(sessionId, { silent = false } = {}) {
     }
   }
   closeStatusGroup();
+}
+
+function activeConversationKey() {
+  return state.activeGroupId ? `group:${state.activeGroupId}` : `agent:${state.active || ""}`;
+}
+
+function clearMessagesForAgent(agentId) {
+  if (state.active !== agentId || state.activeGroupId) return;
+  els.messages.innerHTML = "";
+  closeStatusGroup();
+  addInlineEvent({ type: "chat.empty", ts: Date.now(), status: "Новый чистый чат" });
+}
+
+function selectAgent(agentId) {
+  if (!agentId || state.active === agentId && !state.activeGroupId) return;
+  if (state.eventSource) {
+    state.eventSource.close();
+    state.eventSource = null;
+  }
+  state.active = agentId;
+  state.activeGroupId = null;
+  state.activeChatId = state.activeChatByAgent[agentId] || null;
+  state.chats = [];
+  els.messages.innerHTML = "";
+  closeStatusGroup();
+  addInlineEvent({ type: "chat.loading", ts: Date.now(), status: "Загружаю чат агента…" });
+  updateActive();
+  renderAgents();
+  loadAgentChats().catch((error) => {
+    if (state.active === agentId) addMessage("assistant", error.message, "error");
+  });
+  loadDiagnostics().catch(() => {});
 }
 
 function renderPromptRouter() {
@@ -2531,6 +2558,7 @@ async function inspectSnapshot(snapshotId) {
 
 function connectEvents(runId, sender = null) {
   if (state.eventSource) state.eventSource.close();
+  const conversationKey = activeConversationKey();
   state.eventSource = new EventSource(`/api/runs/${runId}/events`);
   let assistantNode = null;
   let typingNode = addTyping();
@@ -2555,6 +2583,13 @@ function connectEvents(runId, sender = null) {
   state.eventSource.onmessage = (message) => {
     const event = JSON.parse(message.data);
     addActivity(event);
+    if (activeConversationKey() !== conversationKey) {
+      if (event.type === "run.completed" || event.type === "run.failed" || event.type === "run.exited") {
+        loadAgentChats().catch(() => {});
+        loadRuns().catch(() => {});
+      }
+      return;
+    }
 
     if (event.type === "message.delta") {
       state.assistantBuffer += event.delta || "";
@@ -3061,7 +3096,7 @@ function renderAttachPreview() {
 
 function updateComposerButtons() {
   const hasContent = els.prompt.value.trim().length > 0 || state.pendingAttachments.length > 0;
-  els.micBtn.hidden = hasContent;
+  els.micBtn.hidden = true;
   els.send.hidden = !hasContent;
 }
 
@@ -3242,9 +3277,6 @@ els.fileInput.addEventListener("change", () => {
     els.fileInput.value = "";
   }
 });
-els.micBtn.addEventListener("click", () => startRecording());
-els.recordCancel.addEventListener("click", () => stopRecording(false));
-els.recordSend.addEventListener("click", () => stopRecording(true));
 els.prompt.addEventListener("input", updateComposerButtons);
 els.prompt.addEventListener("paste", (event) => {
   const files = [...(event.clipboardData?.items || [])]
