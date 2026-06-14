@@ -94,33 +94,38 @@ def _build_input_content(*, prompt: str, reference_image: Any = None) -> List[Di
             "openai-codex payload reference arg",
         )
     else:
-        text = replace_once(
-            text,
-            'def _collect_image_b64(client: Any, *, prompt: str, size: str, quality: str) -> Optional[str]:\n'
-            '    """Stream a Codex Responses image_generation call and return the b64 image."""\n'
-            '    image_b64: Optional[str] = None\n\n'
-            '    with client.responses.stream(\n',
-            'def _collect_image_b64(\n'
-            '    client: Any,\n'
-            '    *,\n'
-            '    prompt: str,\n'
-            '    size: str,\n'
-            '    quality: str,\n'
-            '    reference_image: Any = None,\n'
-            ') -> Optional[str]:\n'
-            '    """Stream a Codex Responses image_generation call and return the b64 image."""\n'
-            '    image_b64: Optional[str] = None\n'
-            '    content = _build_input_content(prompt=prompt, reference_image=reference_image)\n\n'
-            '    with client.responses.stream(\n',
-            "openai-codex legacy collector signature",
+        legacy_already_patched = (
+            "reference_image: Any = None" in text
+            and 'content.append({"type": "input_image", "image_url": reference_image_url})' in text
         )
+        if not legacy_already_patched:
+            text = replace_once(
+                text,
+                'def _collect_image_b64(client: Any, *, prompt: str, size: str, quality: str) -> Optional[str]:\n'
+                '    """Stream a Codex Responses image_generation call and return the b64 image."""\n'
+                '    image_b64: Optional[str] = None\n\n'
+                '    with client.responses.stream(\n',
+                'def _collect_image_b64(\n'
+                '    client: Any,\n'
+                '    *,\n'
+                '    prompt: str,\n'
+                '    size: str,\n'
+                '    quality: str,\n'
+                '    reference_image: Any = None,\n'
+                ') -> Optional[str]:\n'
+                '    """Stream a Codex Responses image_generation call and return the b64 image."""\n'
+                '    image_b64: Optional[str] = None\n'
+                '    content = _build_input_content(prompt=prompt, reference_image=reference_image)\n\n'
+                '    with client.responses.stream(\n',
+                "openai-codex legacy collector signature",
+            )
 
-        text = replace_once(
-            text,
-            '            "content": [{"type": "input_text", "text": prompt}],\n',
-            '            "content": content,\n',
-            "openai-codex legacy input content",
-        )
+            text = replace_once(
+                text,
+                '            "content": [{"type": "input_text", "text": prompt}],\n',
+                '            "content": content,\n',
+                "openai-codex legacy input content",
+            )
 
     text = replace_once(
         text,
@@ -174,12 +179,15 @@ def patch_image_tool(root: Path) -> None:
         "image_generate debug params",
     )
 
-    text = replace_once(
-        text,
-        "def _dispatch_to_plugin_provider(prompt: str, aspect_ratio: str):\n",
-        "def _dispatch_to_plugin_provider(prompt: str, aspect_ratio: str, **provider_kwargs):\n",
-        "plugin dispatch signature",
-    )
+    if "def _dispatch_to_plugin_provider(prompt: str, aspect_ratio: str, **kwargs):\n" in text:
+        pass
+    else:
+        text = replace_once(
+            text,
+            "def _dispatch_to_plugin_provider(prompt: str, aspect_ratio: str):\n",
+            "def _dispatch_to_plugin_provider(prompt: str, aspect_ratio: str, **provider_kwargs):\n",
+            "plugin dispatch signature",
+        )
 
     if "kwargs.update({k: v for k, v in provider_kwargs.items() if v is not None})" not in text:
         if "        result = provider.generate(prompt=prompt, aspect_ratio=aspect_ratio)\n" in text:
@@ -208,6 +216,8 @@ def patch_image_tool(root: Path) -> None:
                 "        result = provider.generate(**kwargs)\n",
                 1,
             )
+        elif "        result = provider.generate(prompt=prompt, aspect_ratio=aspect_ratio, **kwargs)\n" in text:
+            pass
         else:
             fail("Could not patch plugin dispatch kwargs: expected provider.generate block not found")
 
