@@ -9,6 +9,7 @@ PROFILE_URL="${PROFILE_URL:-$BASE_URL/infobiz-agent-profile-marketer-$VERSION.ta
 WEB_SHELL_URL="${WEB_SHELL_URL:-$BASE_URL/agent-web-shell-$VERSION.tar.gz}"
 HERMES_BRANCH="${HERMES_BRANCH:-main}"
 HERMES_SOURCE_URL="${HERMES_SOURCE_URL:-https://github.com/NousResearch/hermes-agent/archive/refs/heads/$HERMES_BRANCH.tar.gz}"
+HERMES_IMAGE_REFERENCE_PATCH_URL="${HERMES_IMAGE_REFERENCE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-image-reference.py}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.11}"
 HERMES_EXTRAS="${HERMES_EXTRAS:-cli,mcp}"
 NODE_VERSION="${NODE_VERSION:-22}"
@@ -246,6 +247,12 @@ patch_official_hermes_setup() {
   ' "$setup_path" > "$tmp_path"
   mv "$tmp_path" "$setup_path"
   chmod +x "$setup_path"
+}
+
+patch_hermes_image_reference_support() {
+  local patcher="$TMP_ROOT/patch-hermes-image-reference.py"
+  curl -fsSL "$HERMES_IMAGE_REFERENCE_PATCH_URL" -o "$patcher"
+  "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" "$HERMES_AGENT_ROOT"
 }
 
 install_hermes_from_source() {
@@ -584,6 +591,7 @@ main() {
   install_node_runtime
   progress_stage "Установка Hermes официальным установщиком"
   install_hermes_from_source
+  patch_hermes_image_reference_support >> "$LOG_FILE" 2>&1
   progress_stage "Создание агентов и установка скиллов"
   install_profiles_and_skills
   run_openai_auth

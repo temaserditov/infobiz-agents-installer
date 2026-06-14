@@ -144,6 +144,8 @@ required = [
     "do not moralize",
     "generic model",
     "failed draft",
+    "reference_image",
+    "plain text-only generation",
 ]
 for needle in required:
     if needle not in joined:

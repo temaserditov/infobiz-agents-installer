@@ -28,6 +28,7 @@ WEB_SHELL_HOST="${WEB_SHELL_HOST:-127.0.0.1}"
 WEB_SHELL_PUBLIC_URL="${WEB_SHELL_PUBLIC_URL:-}"
 HERMES_BRANCH="${HERMES_BRANCH:-main}"
 HERMES_SOURCE_URL="${HERMES_SOURCE_URL:-https://github.com/NousResearch/hermes-agent/archive/refs/heads/$HERMES_BRANCH.tar.gz}"
+HERMES_IMAGE_REFERENCE_PATCH_URL="${HERMES_IMAGE_REFERENCE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-image-reference.py}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.11}"
 HERMES_EXTRAS="${HERMES_EXTRAS:-cli,mcp}"
 TELEGRAM_PACKAGES=(
@@ -456,6 +457,12 @@ patch_official_hermes_setup() {
   ' "$setup_path" > "$tmp_path"
   /bin/mv "$tmp_path" "$setup_path"
   /bin/chmod +x "$setup_path"
+}
+
+patch_hermes_image_reference_support() {
+  local patcher="$TMPDIR/patch-hermes-image-reference.py"
+  download_file "$HERMES_IMAGE_REFERENCE_PATCH_URL" "$patcher" || return 1
+  "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" "$HERMES_AGENT_ROOT"
 }
 
 install_hermes_from_source() {
@@ -958,6 +965,7 @@ fi
 ensure_uv || fail "Could not install uv"
 install_node_runtime || fail "Could not install Node.js runtime"
 install_hermes_from_source || fail "Official Hermes setup failed"
+patch_hermes_image_reference_support >> "$LOG_FILE" 2>&1 || fail "Could not patch Hermes image reference support"
 
 [[ -x "$HERMES_CMD" ]] || fail "Hermes command not found: $HERMES_CMD"
 
