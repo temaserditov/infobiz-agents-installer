@@ -1,0 +1,165 @@
+#!/bin/zsh
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+VERSION="${VERSION:-0.1.0}"
+TARBALL="${PROFILE_TARBALL:-$REPO_ROOT/dist/infobiz-agent-profile-marketer-$VERSION.tar.gz}"
+HERMES_AGENT_ROOT="${HERMES_AGENT_ROOT:-$HOME/.hermes/hermes-agent}"
+PYTHON_BIN="${PYTHON_BIN:-$HERMES_AGENT_ROOT/venv/bin/python}"
+EXPECTED_PROFILES=(default marketer copywriter designer tech)
+
+say() {
+  printf "==> %s\n" "$1"
+}
+
+fail() {
+  printf "ERROR: %s\n" "$1" >&2
+  exit 1
+}
+
+[[ -f "$TARBALL" ]] || fail "Profile payload not found: $TARBALL"
+[[ -d "$HERMES_AGENT_ROOT" ]] || fail "Hermes agent source not found: $HERMES_AGENT_ROOT"
+[[ -x "$PYTHON_BIN" ]] || fail "Hermes Python not found: $PYTHON_BIN"
+
+TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/infobiz-profile-smoke.XXXXXX")"
+trap 'rm -rf "$TMP_ROOT"' EXIT
+
+say "Extracting profile payload"
+tar -xzf "$TARBALL" -C "$TMP_ROOT"
+PAYLOAD="$TMP_ROOT/profile"
+[[ -d "$PAYLOAD" ]] || fail "Payload root missing"
+
+say "Checking expected profiles"
+for profile in "${EXPECTED_PROFILES[@]}"; do
+  if [[ "$profile" == "default" ]]; then
+    [[ -f "$PAYLOAD/default/SOUL.md" ]] || fail "Missing default/SOUL.md"
+  else
+    [[ -f "$PAYLOAD/agents/$profile/SOUL.md" ]] || fail "Missing agents/$profile/SOUL.md"
+  fi
+done
+if [[ -d "$PAYLOAD/agents/producer" ]]; then
+  fail "Unexpected producer profile found in payload"
+fi
+
+say "Checking Hermes context-file scanner"
+"$PYTHON_BIN" - "$PAYLOAD" "$HERMES_AGENT_ROOT" <<'PY'
+import sys
+from pathlib import Path
+
+payload = Path(sys.argv[1])
+hermes_root = Path(sys.argv[2])
+sys.path.insert(0, str(hermes_root))
+
+try:
+    from agent.prompt_builder import _scan_context_content
+except Exception as exc:
+    raise SystemExit(f"Could not import Hermes prompt scanner: {exc}")
+
+errors = []
+for path in sorted(payload.rglob("*.md")):
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    scanned = _scan_context_content(text, path.name)
+    if scanned.startswith("[BLOCKED:"):
+        rel = path.relative_to(payload)
+        errors.append(f"{rel}: {scanned}")
+
+if errors:
+    print("\n".join(errors))
+    raise SystemExit(1)
+
+print("Hermes scanner accepted all markdown context files.")
+PY
+
+say "Checking role identity headers"
+python3 - "$PAYLOAD" <<'PY'
+import sys
+from pathlib import Path
+
+payload = Path(sys.argv[1])
+expected = {
+    "marketer": "Маркетолог",
+    "copywriter": "Копирайтер",
+    "designer": "Дизайнер",
+    "tech": "Технарь",
+}
+
+errors = []
+for profile, public_name in expected.items():
+    soul = (payload / "agents" / profile / "SOUL.md").read_text(encoding="utf-8", errors="ignore")
+    head = soul[:900]
+    if '# Installed identity guard' not in head:
+        errors.append(f"{profile}: missing Installed identity guard at top")
+    if public_name not in head:
+        errors.append(f"{profile}: public name {public_name!r} not found in identity guard")
+    if "Hermes Agent (profile" in head or "AI-assistant in Hermes Agent" in head:
+        errors.append(f"{profile}: technical Hermes identity leaked into guard")
+
+default_soul = (payload / "default" / "SOUL.md").read_text(encoding="utf-8", errors="ignore")
+if "Я Гермес" not in default_soul:
+    errors.append("default: Hermes identity line missing")
+
+if errors:
+    print("\n".join(errors))
+    raise SystemExit(1)
+
+print("Role identity headers look sane.")
+PY
+
+if [[ "${LIVE_SMOKE:-0}" == "1" ]]; then
+  say "Running optional live greeting smoke test"
+  PROFILE="${PROFILE:-marketer}"
+  PROMPT="${PROMPT:-Кто ты? Ответь одним коротким предложением.}"
+  EXPECT="${EXPECT:-Маркетолог}"
+  LIVE_HOME="$TMP_ROOT/live-home"
+  mkdir -p "$LIVE_HOME/profiles/$PROFILE" "$TMP_ROOT/approvals"
+  rsync -a "$PAYLOAD/agents/$PROFILE/" "$LIVE_HOME/profiles/$PROFILE/"
+  if [[ -f "$HOME/.hermes/auth.json" ]]; then
+    cp "$HOME/.hermes/auth.json" "$LIVE_HOME/profiles/$PROFILE/auth.json"
+  fi
+  if [[ -f "$HOME/.hermes/.env" ]]; then
+    cp "$HOME/.hermes/.env" "$LIVE_HOME/profiles/$PROFILE/.env"
+  fi
+  cat >> "$LIVE_HOME/profiles/$PROFILE/.env" <<ENV
+HERMES_HOME='$LIVE_HOME/profiles/$PROFILE'
+HERMES_INFERENCE_PROVIDER='openai-codex'
+HERMES_INFERENCE_MODEL='gpt-5.5'
+HERMES_KANBAN_DISPATCH_IN_GATEWAY='false'
+ENV
+
+  OUT_FILE="$TMP_ROOT/live-output.jsonl"
+  HERMES_HOME="$LIVE_HOME/profiles/$PROFILE" \
+  HERMES_AGENT_ROOT="$HERMES_AGENT_ROOT" \
+  PYTHONPATH="$HERMES_AGENT_ROOT" \
+  AGENT_WEB_APPROVAL_DIR="$TMP_ROOT/approvals" \
+  AGENT_WEB_TOOLSETS="clarify" \
+    "$PYTHON_BIN" "$REPO_ROOT/web-shell/runner.py" \
+      --profile "$PROFILE" \
+      --session-id "smoke-$(date +%s)" \
+      --prompt "$PROMPT" > "$OUT_FILE"
+
+  python3 - "$OUT_FILE" "$EXPECT" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+expect = sys.argv[2].lower()
+final = ""
+for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+    try:
+        event = json.loads(line)
+    except Exception:
+        continue
+    if event.get("type") == "run.failed":
+        raise SystemExit(f"Live smoke failed: {event.get('error')}")
+    if event.get("type") == "run.completed":
+        final = event.get("output") or ""
+
+print(final)
+if expect not in final.lower():
+    raise SystemExit(f"Expected {expect!r} in live response")
+PY
+fi
+
+say "Profile payload smoke test passed"

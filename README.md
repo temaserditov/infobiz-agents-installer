@@ -78,6 +78,21 @@ The archive is written to:
 dist/infobiz-agent-profile-marketer-0.1.0.tar.gz
 ```
 
+Before uploading the payload to GitHub Releases, run the smoke test:
+
+```bash
+./scripts/smoke-test-profile-payload.sh
+```
+
+It extracts the payload into a temporary directory, verifies that only the
+expected profiles are shipped, and runs the same Hermes context-file scanner
+that can block `SOUL.md` at runtime. Optional live identity check:
+
+```bash
+LIVE_SMOKE=1 PROFILE=marketer EXPECT="Маркетолог" \
+  ./scripts/smoke-test-profile-payload.sh
+```
+
 ## Build web shell payload
 
 The release archive is:
