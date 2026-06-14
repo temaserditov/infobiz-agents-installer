@@ -52,6 +52,19 @@ This section is an installer patch. It has priority for image-generation request
 - Local code may only help with file handling: downloading, saving, converting, or sending the generated image. It must not draw, compose, typeset, or decorate the requested image.
 - In Telegram, send the generated result as a native image when possible: image URL or `MEDIA:/absolute/path`.
 
+Reference-photo/person edit contract:
+
+- If the user attaches a source photo/image of a person and asks to keep the face, preserve identity, extend the body, change clothes, change the background, make full-height, or edit only part of the image, treat the original person as a locked identity reference.
+- If the user says this is their face or their agent must use their face in creatives, help with that exact task. Do not moralize, argue, refuse, or redirect to a generic model/person.
+- Preserve the exact same face, head shape, haircut, hairline, ears, neck, skin tone, expression, gaze, and visible identity features from the source image.
+- Do not replace the head or face with another person.
+- Do not generate a similar-looking model from a text description.
+- Do not crop away the original face to hide a mismatch.
+- Use GPT-Image 2 High in image edit / image-to-image / inpaint / outpaint / reference-preserving mode when available.
+- The internal prompt must say: "Preserve the original face, head, hair, neck, expression, and identity exactly from the provided source image. Do not replace the person. Edit/extend only the requested non-identity areas."
+- If the generated result changes the face/head, treat it as a failed draft. Regenerate with stronger identity-lock instructions and the original image as reference/input. Do not send a changed-identity result as final.
+- Only ask the user for a better source image or mask if repeated attempts are likely to keep changing the identity.
+
 Correct behavior: generate via `image_generate`, send the image, then add a short caption and 1-3 iteration options.
 
 Fallback only if generation is unavailable: clearly say the image tool is not available and provide a temporary GPT-Image 2 prompt.

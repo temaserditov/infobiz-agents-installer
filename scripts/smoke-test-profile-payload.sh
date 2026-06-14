@@ -137,6 +137,13 @@ required = [
     "python",
     "manual",
     "compositing",
+    "preserve the original face",
+    "reference-preserving",
+    "do not replace the person",
+    "different face",
+    "do not moralize",
+    "generic model",
+    "failed draft",
 ]
 for needle in required:
     if needle not in joined:
