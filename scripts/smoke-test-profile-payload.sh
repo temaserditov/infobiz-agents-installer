@@ -129,10 +129,14 @@ for path in files:
 
 required = [
     "gpt-image 2",
+    "gpt-image 2 high",
     "without api",
     "image_generate",
     "actual image",
     "prompt-only",
+    "python",
+    "manual",
+    "compositing",
 ]
 for needle in required:
     if needle not in joined:
