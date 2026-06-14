@@ -870,7 +870,7 @@ async function loadSessionPressure() {
   renderSessionPressure();
 }
 
-async function loadAgentChats() {
+async function loadAgentChats({ refreshMessages = true } = {}) {
   if (!state.active) return;
   const agentId = state.active;
   const data = await api(`/api/agents/${agentId}/chats`);
@@ -882,9 +882,9 @@ async function loadAgentChats() {
   }
   state.activeChatByAgent[agentId] = state.activeChatId;
   renderAgentChats();
-  if (state.activeChatId) {
+  if (refreshMessages && state.activeChatId) {
     await loadChatMessages(state.activeChatId, { silent: true, agentId });
-  } else {
+  } else if (refreshMessages) {
     clearMessagesForAgent(agentId);
   }
 }
@@ -2593,7 +2593,7 @@ function connectEvents(runId, sender = null) {
     addActivity(event);
     if (activeConversationKey() !== conversationKey) {
       if (event.type === "run.completed" || event.type === "run.failed" || event.type === "run.exited") {
-        loadAgentChats().catch(() => {});
+        loadAgentChats({ refreshMessages: false }).catch(() => {});
         loadRuns().catch(() => {});
       }
       return;
@@ -2607,6 +2607,12 @@ function connectEvents(runId, sender = null) {
         assistantNode = addMessage("assistant", "", "", sender);
       }
       setMessageText(assistantNode, state.assistantBuffer);
+    }
+
+    if (event.type === "run.started" && event.sessionId && !state.activeGroupId) {
+      state.activeChatId = event.sessionId;
+      state.activeChatByAgent[state.active] = event.sessionId;
+      renderAgentChats();
     }
 
     if (event.type === "message.attachment" && event.attachment) {
@@ -2643,7 +2649,7 @@ function connectEvents(runId, sender = null) {
       finishRun("готово");
       loadHealth().catch(() => {});
       loadRuns().catch(() => {});
-      loadAgentChats().catch(() => {});
+      loadAgentChats({ refreshMessages: false }).catch(() => {});
     }
 
     if (event.type === "run.failed") {
