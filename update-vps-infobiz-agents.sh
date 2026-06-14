@@ -4,12 +4,14 @@ set -euo pipefail
 INSTALL_ROOT="${INSTALL_ROOT:-$HOME/InfobizAgents}"
 HERMES_ROOT="${HERMES_ROOT:-$HOME/.hermes}"
 HERMES_AGENT_ROOT="$HERMES_ROOT/hermes-agent"
+COPYWRITER_ROOT="$HERMES_ROOT/profiles/copywriter"
 DESIGNER_ROOT="$HERMES_ROOT/profiles/designer"
 TECH_ROOT="$HERMES_ROOT/profiles/tech"
 WEB_SHELL_ROOT="$INSTALL_ROOT/web-shell"
 VERSION="${VERSION:-0.1.0}"
 BASE_URL="${BASE_URL:-https://github.com/temaserditov/infobiz-agents-installer/releases/download/v$VERSION}"
 WEB_SHELL_URL="${WEB_SHELL_URL:-$BASE_URL/agent-web-shell-$VERSION.tar.gz}"
+PROFILE_URL="${PROFILE_URL:-$BASE_URL/infobiz-agent-profile-marketer-$VERSION.tar.gz}"
 HERMES_IMAGE_REFERENCE_PATCH_URL="${HERMES_IMAGE_REFERENCE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-image-reference.py}"
 TECH_NO_CODE_PATCH_URL="${TECH_NO_CODE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-tech-no-code-defaults.py}"
 
@@ -156,9 +158,38 @@ update_web_shell() {
   done
 }
 
+update_copywriter_profile() {
+  local workdir payload source_dir backup_dir item
+  workdir="$(mktemp -d "${TMPDIR:-/tmp}/infobiz-profile.XXXXXX")"
+  payload="$workdir/profile.tar.gz"
+  backup_dir="$COPYWRITER_ROOT/.infobiz-update-backup.$(date +%Y%m%d%H%M%S)"
+  curl -fsSL "$PROFILE_URL" -o "$payload"
+  tar -xzf "$payload" -C "$workdir"
+  source_dir="$workdir/profile/agents/copywriter"
+  [[ -d "$source_dir" ]] || return 1
+
+  mkdir -p "$COPYWRITER_ROOT" "$backup_dir"
+  for item in SOUL.md IDENTITY.md AGENTS.md OUTPUT_STANDARDS.md TEST_SCENARIOS.md COMMANDS.md FIRST_RUN.md READY_CHECKLIST.md README.md COPY_BRIEF.md MARKETER_HANDOFF.md DESIGNER_TECH_HANDOFF.md knowledge skills; do
+    [[ -e "$COPYWRITER_ROOT/$item" ]] && cp -a "$COPYWRITER_ROOT/$item" "$backup_dir/" || true
+  done
+
+  rsync -a --delete \
+    --exclude '.env' \
+    --exclude 'auth.json' \
+    --exclude 'config.yaml' \
+    --exclude 'sessions/' \
+    --exclude 'logs/' \
+    --exclude 'memories/' \
+    --exclude 'cache/' \
+    --exclude 'cron/' \
+    --exclude 'test-runs/' \
+    "$source_dir/" "$COPYWRITER_ROOT/"
+}
+
 [[ "$(uname -s)" == "Linux" ]] || fail "This updater supports Linux VPS only."
 [[ -d "$HERMES_AGENT_ROOT" ]] || fail "Hermes is not installed. Run the full installer first."
 [[ -x "$HERMES_AGENT_ROOT/venv/bin/python" ]] || fail "Hermes Python venv is missing. Run the full installer first."
+[[ -d "$COPYWRITER_ROOT" ]] || fail "Copywriter profile is not installed. Run the full installer first."
 [[ -d "$DESIGNER_ROOT" ]] || fail "Designer profile is not installed. Run the full installer first."
 [[ -d "$TECH_ROOT" ]] || fail "Tech profile is not installed. Run the full installer first."
 
@@ -173,6 +204,9 @@ patch_hermes_image_reference_support
 say "Patching tech no-code defaults"
 patch_tech_no_code_defaults
 
+say "Updating copywriter profile"
+update_copywriter_profile
+
 say "Updating WebShell"
 update_web_shell
 
@@ -181,6 +215,7 @@ configure_designer_image_generation
 
 say "Restarting designer gateway"
 if command -v systemctl >/dev/null 2>&1; then
+  systemctl restart infobiz-hermes-gateway-copywriter.service >/dev/null 2>&1 || true
   systemctl restart infobiz-hermes-gateway-designer.service >/dev/null 2>&1 || true
   systemctl restart infobiz-hermes-gateway-tech.service >/dev/null 2>&1 || true
   systemctl restart infobiz-web-shell.service >/dev/null 2>&1 || true

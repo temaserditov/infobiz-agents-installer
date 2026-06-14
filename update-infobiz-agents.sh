@@ -7,6 +7,7 @@ export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin:$HOM
 INSTALL_ROOT="${INSTALL_ROOT:-$HOME/InfobizAgents}"
 HERMES_ROOT="${HERMES_ROOT:-$HOME/.hermes}"
 HERMES_AGENT_ROOT="$HERMES_ROOT/hermes-agent"
+COPYWRITER_ROOT="$HERMES_ROOT/profiles/copywriter"
 DESIGNER_ROOT="$HERMES_ROOT/profiles/designer"
 TECH_ROOT="$HERMES_ROOT/profiles/tech"
 WEB_SHELL_ROOT="$INSTALL_ROOT/web-shell"
@@ -14,6 +15,7 @@ LOG_FILE="$INSTALL_ROOT/update.log"
 VERSION="${VERSION:-0.1.0}"
 BASE_URL="${BASE_URL:-https://github.com/temaserditov/infobiz-agents-installer/releases/download/v$VERSION}"
 WEB_SHELL_URL="${WEB_SHELL_URL:-$BASE_URL/agent-web-shell-$VERSION.tar.gz}"
+PROFILE_URL="${PROFILE_URL:-$BASE_URL/infobiz-agent-profile-marketer-$VERSION.tar.gz}"
 HERMES_IMAGE_REFERENCE_PATCH_URL="${HERMES_IMAGE_REFERENCE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-image-reference.py}"
 TECH_NO_CODE_PATCH_URL="${TECH_NO_CODE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-tech-no-code-defaults.py}"
 
@@ -162,6 +164,35 @@ update_web_shell() {
   /usr/bin/xattr -dr com.apple.quarantine "$WEB_SHELL_ROOT" >/dev/null 2>&1 || true
 }
 
+update_copywriter_profile() {
+  local workdir payload source_dir backup_dir item
+  workdir="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/infobiz-profile.XXXXXX")"
+  payload="$workdir/profile.tar.gz"
+  backup_dir="$COPYWRITER_ROOT/.infobiz-update-backup.$(/bin/date +%Y%m%d%H%M%S)"
+  /usr/bin/curl -fsSL "$PROFILE_URL" -o "$payload"
+  /usr/bin/tar -xzf "$payload" -C "$workdir"
+  source_dir="$workdir/profile/agents/copywriter"
+  [[ -d "$source_dir" ]] || return 1
+
+  /bin/mkdir -p "$COPYWRITER_ROOT" "$backup_dir"
+  for item in SOUL.md IDENTITY.md AGENTS.md OUTPUT_STANDARDS.md TEST_SCENARIOS.md COMMANDS.md FIRST_RUN.md READY_CHECKLIST.md README.md COPY_BRIEF.md MARKETER_HANDOFF.md DESIGNER_TECH_HANDOFF.md knowledge skills; do
+    [[ -e "$COPYWRITER_ROOT/$item" ]] && /usr/bin/ditto "$COPYWRITER_ROOT/$item" "$backup_dir/$item" || true
+  done
+
+  /usr/bin/rsync -a --delete \
+    --exclude '.env' \
+    --exclude 'auth.json' \
+    --exclude 'config.yaml' \
+    --exclude 'sessions/' \
+    --exclude 'logs/' \
+    --exclude 'memories/' \
+    --exclude 'cache/' \
+    --exclude 'cron/' \
+    --exclude 'test-runs/' \
+    "$source_dir/" "$COPYWRITER_ROOT/"
+  /usr/bin/xattr -dr com.apple.quarantine "$COPYWRITER_ROOT" >/dev/null 2>&1 || true
+}
+
 restart_launch_agent() {
   local label="$1"
   local plist="$2"
@@ -177,6 +208,7 @@ restart_launch_agent() {
 [[ "$(/usr/bin/uname -s)" == "Darwin" ]] || fail "This updater supports macOS only."
 [[ -d "$HERMES_AGENT_ROOT" ]] || fail "Hermes is not installed. Run the full installer first."
 [[ -x "$HERMES_AGENT_ROOT/venv/bin/python" ]] || fail "Hermes Python venv is missing. Run the full installer first."
+[[ -d "$COPYWRITER_ROOT" ]] || fail "Copywriter profile is not installed. Run the full installer first."
 [[ -d "$DESIGNER_ROOT" ]] || fail "Designer profile is not installed. Run the full installer first."
 [[ -d "$TECH_ROOT" ]] || fail "Tech profile is not installed. Run the full installer first."
 
@@ -195,6 +227,9 @@ patch_hermes_image_reference_support >> "$LOG_FILE" 2>&1 || fail "Could not patc
 say "Patching tech no-code defaults"
 patch_tech_no_code_defaults >> "$LOG_FILE" 2>&1 || fail "Could not patch tech no-code defaults"
 
+say "Updating copywriter profile"
+update_copywriter_profile >> "$LOG_FILE" 2>&1 || fail "Could not update copywriter profile"
+
 say "Updating WebShell"
 update_web_shell >> "$LOG_FILE" 2>&1 || fail "Could not update WebShell"
 
@@ -203,6 +238,7 @@ configure_designer_image_generation >> "$LOG_FILE" 2>&1 || fail "Could not confi
 
 say "Restarting designer gateway"
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
+restart_launch_agent "ai.hermes.gateway-copywriter" "$LAUNCH_AGENTS/ai.hermes.gateway-copywriter.plist"
 restart_launch_agent "ai.hermes.gateway-designer" "$LAUNCH_AGENTS/ai.hermes.gateway-designer.plist"
 restart_launch_agent "ai.hermes.gateway-tech" "$LAUNCH_AGENTS/ai.hermes.gateway-tech.plist"
 restart_launch_agent "com.infobiz.agents.web-shell" "$LAUNCH_AGENTS/com.infobiz.agents.web-shell.plist"
