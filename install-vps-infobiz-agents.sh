@@ -234,14 +234,13 @@ install_hermes_from_source() {
   rm -rf "$HERMES_AGENT_ROOT"
   mkdir -p "$HERMES_AGENT_ROOT"
   run_logged "Extracting Hermes source" tar --strip-components=1 -xzf "$source_tarball" -C "$HERMES_AGENT_ROOT"
-  run_logged "Installing Python $PYTHON_VERSION" "$UV_CMD" python install "$PYTHON_VERSION"
-  run_logged "Creating Hermes virtual environment" "$UV_CMD" venv "$HERMES_AGENT_ROOT/venv" --python "$PYTHON_VERSION"
-  export VIRTUAL_ENV="$HERMES_AGENT_ROOT/venv"
-  run_logged "Installing Hermes Python packages" bash -lc "cd '$HERMES_AGENT_ROOT' && '$UV_CMD' pip install --only-binary=:all: -e '.[${HERMES_EXTRAS}]'"
-  run_logged "Installing Telegram support" "$UV_CMD" pip install --only-binary=:all: "python-telegram-bot[webhooks]==22.6" "aiohttp==3.13.3" "qrcode==7.4.2"
+  run_logged "Running official Hermes setup" bash -lc "cd '$HERMES_AGENT_ROOT' && printf 'n\nn\nn\n' | HERMES_HOME='$HERMES_ROOT' bash ./setup-hermes.sh"
+  [[ -x "$HERMES_AGENT_ROOT/venv/bin/python" ]] || fail "Official Hermes setup did not create Python venv"
+  [[ -x "$HERMES_CMD" ]] || fail "Official Hermes setup did not create Hermes command"
+  run_logged "Installing Telegram support" "$HERMES_AGENT_ROOT/venv/bin/python" -m pip install --only-binary=:all: "python-telegram-bot[webhooks]==22.6" "aiohttp==3.13.3" "qrcode==7.4.2"
   mkdir -p "$HOME/.local/bin" "$HERMES_ROOT"/{cron,sessions,logs,pairing,hooks,image_cache,audio_cache,memories,skills}
   ln -sf "$HERMES_CMD" "$HOME/.local/bin/hermes"
-  [[ -f "$HERMES_ROOT/.env" ]] || cp "$HERMES_AGENT_ROOT/.env.example" "$HERMES_ROOT/.env" 2>/dev/null || : > "$HERMES_ROOT/.env"
+  [[ -f "$HERMES_ROOT/.env" ]] || cp "$HERMES_AGENT_ROOT/.env" "$HERMES_ROOT/.env" 2>/dev/null || cp "$HERMES_AGENT_ROOT/.env.example" "$HERMES_ROOT/.env" 2>/dev/null || : > "$HERMES_ROOT/.env"
   [[ -f "$HERMES_ROOT/config.yaml" ]] || cp "$HERMES_AGENT_ROOT/cli-config.yaml.example" "$HERMES_ROOT/config.yaml" 2>/dev/null || true
   if [[ -f "$HERMES_AGENT_ROOT/tools/skills_sync.py" ]]; then
     HERMES_HOME="$HERMES_ROOT" "$HERMES_AGENT_ROOT/venv/bin/python" "$HERMES_AGENT_ROOT/tools/skills_sync.py" >> "$LOG_FILE" 2>&1 || true
@@ -514,7 +513,7 @@ main() {
   ensure_uv
   progress_stage "Установка Node.js"
   install_node_runtime
-  progress_stage "Установка Hermes"
+  progress_stage "Установка Hermes официальным установщиком"
   install_hermes_from_source
   progress_stage "Создание агентов и установка скиллов"
   install_profiles_and_skills

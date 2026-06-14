@@ -29,13 +29,15 @@ must live only on the `school.serditov.ru` server.
 
 ## Internal details
 
-The installer uses the official Hermes repository as the source of truth, but
-does not call the official interactive installer:
+The installer uses the official Hermes repository and delegates the base Hermes
+runtime setup to Hermes' own `setup-hermes.sh` in non-interactive mode:
 
 - Hermes source: `https://github.com/NousResearch/hermes-agent`
 - Hermes source is downloaded as a GitHub tarball, not via `git clone`
-- `uv`, Python 3.11, Node.js, venv, and Hermes dependencies are installed
-  silently from the terminal installer
+- `uv`, Python 3.11, venv, Hermes dependencies, `.env`, command shim, and
+  bundled Hermes skills are installed by the official Hermes setup script
+- Node.js is still installed by the Infobiz installer because it is required by
+  the bundled WebShell
 - The local web panel is installed into `~/InfobizAgents/web-shell` and started
   as a user LaunchAgent
 - An `Infobiz Agents.app` launcher is created in `/Applications` when possible,

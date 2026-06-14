@@ -328,46 +328,21 @@ install_node_runtime() {
 
 install_hermes_from_source() {
   local source_tarball="$TMPDIR/hermes-agent-source.tar.gz"
-  local python_path
   download_file "$HERMES_SOURCE_URL" "$source_tarball"
   /bin/rm -rf "$HERMES_AGENT_ROOT"
   /bin/mkdir -p "$HERMES_AGENT_ROOT"
   run_logged "Extracting Hermes source" /usr/bin/tar --strip-components=1 -xzf "$source_tarball" -C "$HERMES_AGENT_ROOT" || return 1
-  run_logged "Installing Python $PYTHON_VERSION" "$UV_CMD" python install "$PYTHON_VERSION" || return 1
-  run_logged "Creating Hermes virtual environment" "$UV_CMD" venv "$HERMES_AGENT_ROOT/venv" --python "$PYTHON_VERSION" || return 1
-  export VIRTUAL_ENV="$HERMES_AGENT_ROOT/venv"
-  (
-    cd "$HERMES_AGENT_ROOT"
-    "$UV_CMD" pip install --only-binary=:all: -e ".[${HERMES_EXTRAS}]"
-  ) >> "$LOG_FILE" 2>&1 &
-  local pid="$!"
-  local start now elapsed exit_code
-  start="$(/bin/date +%s)"
-  printf "   Installing Hermes Python packages... 0s"
-  while kill -0 "$pid" >/dev/null 2>&1; do
-    now="$(/bin/date +%s)"
-    elapsed=$((now - start))
-    printf "\r   Installing Hermes Python packages... %s" "$(format_seconds "$elapsed")"
-    sleep 1
-  done
-  set +e
-  wait "$pid"
-  exit_code=$?
-  set -e
-  now="$(/bin/date +%s)"
-  elapsed=$((now - start))
-  if (( exit_code == 0 )); then
-    printf "\r   Installing Hermes Python packages... done in %s\n" "$(format_seconds "$elapsed")"
-  else
-    printf "\r   Installing Hermes Python packages... failed after %s\n" "$(format_seconds "$elapsed")"
-    return "$exit_code"
-  fi
-  run_logged "Installing Telegram support" "$UV_CMD" pip install --only-binary=:all: "${TELEGRAM_PACKAGES[@]}" || return 1
+  run_logged "Running official Hermes setup" /bin/bash -lc "cd '$HERMES_AGENT_ROOT' && printf 'n\nn\nn\n' | HERMES_HOME='$HERMES_ROOT' bash ./setup-hermes.sh" || return 1
+  [[ -x "$HERMES_AGENT_ROOT/venv/bin/python" ]] || return 1
+  [[ -x "$HERMES_CMD" ]] || return 1
+  run_logged "Installing Telegram support" "$HERMES_AGENT_ROOT/venv/bin/python" -m pip install --only-binary=:all: "${TELEGRAM_PACKAGES[@]}" || return 1
 
   /bin/mkdir -p "$HOME/.local/bin" "$HERMES_ROOT"/{cron,sessions,logs,pairing,hooks,image_cache,audio_cache,memories,skills}
   /bin/ln -sf "$HERMES_CMD" "$HOME/.local/bin/hermes"
   if [[ ! -f "$HERMES_ROOT/.env" ]]; then
-    if [[ -f "$HERMES_AGENT_ROOT/.env.example" ]]; then
+    if [[ -f "$HERMES_AGENT_ROOT/.env" ]]; then
+      /bin/cp "$HERMES_AGENT_ROOT/.env" "$HERMES_ROOT/.env"
+    elif [[ -f "$HERMES_AGENT_ROOT/.env.example" ]]; then
       /bin/cp "$HERMES_AGENT_ROOT/.env.example" "$HERMES_ROOT/.env"
     else
       : > "$HERMES_ROOT/.env"
@@ -800,7 +775,7 @@ fi
 /bin/mkdir -p "$HERMES_ROOT"
 ensure_uv || fail "Could not install uv"
 install_node_runtime || fail "Could not install Node.js runtime"
-install_hermes_from_source || fail "Hermes source install failed"
+install_hermes_from_source || fail "Official Hermes setup failed"
 
 [[ -x "$HERMES_CMD" ]] || fail "Hermes command not found: $HERMES_CMD"
 
