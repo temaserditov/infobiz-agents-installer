@@ -138,14 +138,13 @@ gh release upload v0.1.0 dist/infobiz-agent-profile-marketer-0.1.0.tar.gz --clob
 
 ## Agents Installed
 
-VPS installer installs six profiles:
+VPS installer installs five profiles:
 
 ```text
 default   -> Гермес
 designer  -> Дизайнер
 copywriter -> Копирайтер
 marketer  -> Маркетолог
-producer  -> Продюсер
 tech      -> Технарь
 ```
 
@@ -193,7 +192,6 @@ POST body:
     "designer": "123:ABC...",
     "copywriter": "123:ABC...",
     "marketer": "123:ABC...",
-    "producer": "123:ABC...",
     "tech": "123:ABC..."
   }
 }
@@ -221,7 +219,6 @@ infobiz-hermes-gateway.service
 infobiz-hermes-gateway-designer.service
 infobiz-hermes-gateway-copywriter.service
 infobiz-hermes-gateway-marketer.service
-infobiz-hermes-gateway-producer.service
 infobiz-hermes-gateway-tech.service
 ```
 
@@ -231,7 +228,7 @@ WebShell service environment includes:
 WEB_SHELL_ACCESS_TOKEN
 PORT=8787
 HOST=0.0.0.0
-AGENT_PROFILE_ALLOW=default,designer,copywriter,marketer,producer,tech
+AGENT_PROFILE_ALLOW=default,designer,copywriter,marketer,tech
 ```
 
 ## Windows Gotchas Already Hit
@@ -307,4 +304,3 @@ For student-facing commands:
 - Do not expose DMG/local panel legacy demo stuff.
 - If a link/command did not change, explicitly say "Ссылка та же".
 - If a link/command changed, provide the new one.
-
