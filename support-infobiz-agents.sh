@@ -2,6 +2,9 @@
 set -euo pipefail
 
 MODE="${1:-on}"
+VERSION="${VERSION:-0.1.0}"
+BASE_URL="${BASE_URL:-https://github.com/temaserditov/infobiz-agents-installer/releases/download/v${VERSION}}"
+WEB_SHELL_URL="${WEB_SHELL_URL:-$BASE_URL/agent-web-shell-$VERSION.tar.gz}"
 INSTALL_ROOT="${INSTALL_ROOT:-$HOME/InfobizAgents}"
 WEB_SHELL_ROOT="${WEB_SHELL_ROOT:-$INSTALL_ROOT/web-shell}"
 WEB_SHELL_PORT="${WEB_SHELL_PORT:-8787}"
@@ -68,6 +71,31 @@ detect_lan_ip() {
       ;;
   esac
   printf "%s" "${ip:-127.0.0.1}"
+}
+
+update_web_shell_payload() {
+  local tmp_dir payload source_dir
+  tmp_dir="${TMPDIR:-/tmp}/infobiz-support-web-shell.$$"
+  payload="$tmp_dir/web-shell.tar.gz"
+  rm -rf "$tmp_dir"
+  mkdir -p "$tmp_dir" "$WEB_SHELL_ROOT"
+  say "Updating WebShell support code"
+  curl -fsSL "$WEB_SHELL_URL" -o "$payload"
+  tar -xzf "$payload" -C "$tmp_dir"
+  source_dir="$tmp_dir/web-shell"
+  [[ -d "$source_dir" ]] || fail "WebShell archive is invalid"
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --delete \
+      --exclude runs \
+      --exclude approvals \
+      --exclude snapshots \
+      --exclude preflights \
+      --exclude uploads \
+      "$source_dir/" "$WEB_SHELL_ROOT/"
+  else
+    cp -R "$source_dir/." "$WEB_SHELL_ROOT/"
+  fi
+  rm -rf "$tmp_dir"
 }
 
 write_support_env() {
@@ -192,6 +220,7 @@ main() {
   token="$(random_token)"
   write_support_env "$token" "$port"
   say "Enabling temporary Infobiz support access"
+  update_web_shell_payload
   case "$os" in
     Darwin) enable_macos "$token" "$port" ;;
     Linux) enable_linux "$token" "$port" ;;
