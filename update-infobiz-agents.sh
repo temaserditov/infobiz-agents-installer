@@ -9,7 +9,11 @@ HERMES_ROOT="${HERMES_ROOT:-$HOME/.hermes}"
 HERMES_AGENT_ROOT="$HERMES_ROOT/hermes-agent"
 DESIGNER_ROOT="$HERMES_ROOT/profiles/designer"
 TECH_ROOT="$HERMES_ROOT/profiles/tech"
+WEB_SHELL_ROOT="$INSTALL_ROOT/web-shell"
 LOG_FILE="$INSTALL_ROOT/update.log"
+VERSION="${VERSION:-0.1.0}"
+BASE_URL="${BASE_URL:-https://github.com/temaserditov/infobiz-agents-installer/releases/download/v$VERSION}"
+WEB_SHELL_URL="${WEB_SHELL_URL:-$BASE_URL/agent-web-shell-$VERSION.tar.gz}"
 HERMES_IMAGE_REFERENCE_PATCH_URL="${HERMES_IMAGE_REFERENCE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-image-reference.py}"
 TECH_NO_CODE_PATCH_URL="${TECH_NO_CODE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-tech-no-code-defaults.py}"
 
@@ -142,6 +146,22 @@ patch_tech_no_code_defaults() {
   "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" "$TECH_ROOT"
 }
 
+update_web_shell() {
+  local workdir payload
+  workdir="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/infobiz-web-shell.XXXXXX")"
+  payload="$workdir/agent-web-shell.tar.gz"
+  /usr/bin/curl -fsSL "$WEB_SHELL_URL" -o "$payload"
+  /usr/bin/tar -xzf "$payload" -C "$workdir"
+  [[ -d "$workdir/web-shell" ]] || return 1
+  /bin/mkdir -p "$WEB_SHELL_ROOT"
+  /usr/bin/ditto "$workdir/web-shell/public" "$WEB_SHELL_ROOT/public"
+  /usr/bin/ditto "$workdir/web-shell/scripts" "$WEB_SHELL_ROOT/scripts"
+  for file in server.mjs runner.py package.json README.md; do
+    [[ -f "$workdir/web-shell/$file" ]] && /bin/cp "$workdir/web-shell/$file" "$WEB_SHELL_ROOT/$file"
+  done
+  /usr/bin/xattr -dr com.apple.quarantine "$WEB_SHELL_ROOT" >/dev/null 2>&1 || true
+}
+
 restart_launch_agent() {
   local label="$1"
   local plist="$2"
@@ -174,6 +194,9 @@ patch_hermes_image_reference_support >> "$LOG_FILE" 2>&1 || fail "Could not patc
 
 say "Patching tech no-code defaults"
 patch_tech_no_code_defaults >> "$LOG_FILE" 2>&1 || fail "Could not patch tech no-code defaults"
+
+say "Updating WebShell"
+update_web_shell >> "$LOG_FILE" 2>&1 || fail "Could not update WebShell"
 
 say "Configuring GPT-Image 2 High"
 configure_designer_image_generation >> "$LOG_FILE" 2>&1 || fail "Could not configure GPT-Image 2 High for designer"

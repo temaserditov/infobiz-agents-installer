@@ -771,18 +771,27 @@ function renderTelegramSettings(message = "") {
   const settings = state.telegramSettings;
   const profiles = settings?.profiles || [];
   const configuredCount = profiles.filter((profile) => profile.configured).length;
+  const restrictedCount = profiles.filter((profile) => profile.allowedUsersConfigured).length;
   els.telegramStatus.className = `settings-status ${configuredCount ? "ok" : ""}`;
   els.telegramStatus.textContent = message || (profiles.length
-    ? `Подключено агентов: ${configuredCount} из ${profiles.length}`
+    ? `Подключено агентов: ${configuredCount} из ${profiles.length}. Ограничен доступ: ${restrictedCount} из ${profiles.length}`
     : "Telegram еще не подключен");
   els.telegramAgentTokens.innerHTML = profiles.map((profile) => `
-    <label class="telegram-token-row">
+    <div class="telegram-token-row">
       <span class="telegram-token-meta">
         <strong>${escapeHtml(profile.name || profile.profile)}</strong>
         <small>${profile.configured ? `подключен: ${escapeHtml(profile.tokenPreview)}` : "токен не добавлен"}</small>
+        <small>${profile.allowedUsersConfigured ? `доступ: ${escapeHtml(profile.allowedUsers)}` : "ID не указан"}</small>
       </span>
-      <input class="card-input telegram-token-input" data-agent="${escapeHtml(profile.profile)}" type="text" autocomplete="off" spellcheck="false" placeholder="1234567890:AA..." />
-    </label>
+      <label class="telegram-token-field">
+        <span>Bot token</span>
+        <input class="card-input telegram-token-input" data-agent="${escapeHtml(profile.profile)}" type="text" autocomplete="off" spellcheck="false" placeholder="1234567890:AA..." />
+      </label>
+      <label class="telegram-token-field">
+        <span>Telegram ID</span>
+        <input class="card-input telegram-allowed-users-input" data-agent="${escapeHtml(profile.profile)}" type="text" autocomplete="off" spellcheck="false" value="${escapeHtml(profile.allowedUsers || "")}" placeholder="123456789, 987654321" />
+      </label>
+    </div>
   `).join("");
 }
 
@@ -805,16 +814,20 @@ function closeSettings() {
 async function saveTelegramSettings() {
   els.telegramSave.disabled = true;
   els.telegramStatus.className = "settings-status";
-  els.telegramStatus.textContent = "Сохраняю токены и перезапускаю Telegram…";
+  els.telegramStatus.textContent = "Сохраняю Telegram и перезапускаю gateway…";
   try {
     const tokens = {};
     for (const input of els.telegramAgentTokens.querySelectorAll(".telegram-token-input")) {
       const value = input.value.trim();
       if (value) tokens[input.dataset.agent] = value;
     }
+    const allowedUsers = {};
+    for (const input of els.telegramAgentTokens.querySelectorAll(".telegram-allowed-users-input")) {
+      allowedUsers[input.dataset.agent] = input.value.trim();
+    }
     const data = await api("/api/telegram", {
       method: "POST",
-      body: JSON.stringify({ tokens }),
+      body: JSON.stringify({ tokens, allowedUsers }),
     });
     const fresh = await api("/api/telegram");
     state.telegramSettings = fresh;
@@ -823,14 +836,14 @@ async function saveTelegramSettings() {
     const failed = results.filter((item) => item.restart && !item.restart.restarted);
     if (failed.length) {
       els.telegramStatus.className = "settings-status error";
-      els.telegramStatus.textContent = `Токен сохранен, но Telegram не перезапустился: ${failed.map((item) => item.name || item.profile).join(", ")}`;
+      els.telegramStatus.textContent = `Настройки сохранены, но Telegram не перезапустился: ${failed.map((item) => item.name || item.profile).join(", ")}`;
     } else {
-      renderTelegramSettings(results.length ? `Сохранено и перезапущено: ${restarted} из ${results.length}` : "Новые токены не введены");
+      renderTelegramSettings(results.length ? `Сохранено и перезапущено: ${restarted} из ${results.length}` : "Изменений нет");
     }
     await refreshSidebar();
   } catch (error) {
     els.telegramStatus.className = "settings-status error";
-    els.telegramStatus.textContent = `Не удалось сохранить токены: ${error.message}`;
+    els.telegramStatus.textContent = `Не удалось сохранить Telegram: ${error.message}`;
   } finally {
     els.telegramSave.disabled = false;
   }

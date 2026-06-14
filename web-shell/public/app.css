@@ -1878,7 +1878,7 @@ button:disabled {
 
 .telegram-token-row {
   display: grid;
-  grid-template-columns: minmax(110px, 150px) minmax(0, 1fr);
+  grid-template-columns: minmax(110px, 150px) minmax(0, 1fr) minmax(0, 1fr);
   gap: 12px;
   align-items: end;
 }
@@ -1906,8 +1906,25 @@ button:disabled {
   font-size: 12px;
 }
 
+.telegram-token-field {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.telegram-token-field span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .telegram-token-list .card-input {
   font-size: 14px;
+}
+
+@media (max-width: 760px) {
+  .telegram-token-row {
+    grid-template-columns: 1fr;
+  }
 }
 
 .settings-status {

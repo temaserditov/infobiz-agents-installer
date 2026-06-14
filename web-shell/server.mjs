@@ -2112,6 +2112,25 @@ function writeEnvValue(text, key, value) {
   return `${text.replace(/\s*$/, "")}\n${line}\n`;
 }
 
+function deleteEnvValue(text, key) {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return text
+    .replace(new RegExp(`^${escaped}=.*\\n?`, "m"), "")
+    .replace(/\n{3,}/g, "\n\n");
+}
+
+function normalizeTelegramAllowedUsers(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const parts = raw.split(/[\s,;]+/).map((item) => item.trim()).filter(Boolean);
+  if (!parts.length) return "";
+  const invalid = parts.find((item) => !/^[0-9]{3,20}$/.test(item));
+  if (invalid) {
+    throw new Error(`invalid Telegram user ID: ${invalid}`);
+  }
+  return [...new Set(parts)].join(",");
+}
+
 function ensureTelegramPlatformEnabled(agentId) {
   const configPath = join(profileDir(agentId), "config.yaml");
   let text = readText(configPath, "");
@@ -2124,11 +2143,20 @@ function telegramSettings(agentId) {
   const path = envPath(agentId);
   const text = readText(path, "");
   const token = readEnvValue(text, "TELEGRAM_BOT_TOKEN");
+  const allowedUsersRaw = readEnvValue(text, "TELEGRAM_ALLOWED_USERS");
+  let allowedUsers = allowedUsersRaw;
+  try {
+    allowedUsers = normalizeTelegramAllowedUsers(allowedUsersRaw);
+  } catch {
+    allowedUsers = allowedUsersRaw;
+  }
   return {
     ok: existsSync(profileDir(agentId)),
     profile: agentId,
     configured: Boolean(token),
     tokenPreview: token ? `${token.slice(0, 6)}...${token.slice(-4)}` : "",
+    allowedUsers,
+    allowedUsersConfigured: Boolean(allowedUsers),
     envPath: path,
     gateway: agentDiagnostics(agentId).gateway.status,
   };
@@ -2146,19 +2174,33 @@ function telegramSettingsAll() {
   };
 }
 
-function saveTelegramToken(agentId, token) {
-  if (!/^[0-9]+:[A-Za-z0-9_-]{20,}$/.test(token) && token !== "") {
+function saveTelegramSettings(agentId, { token, allowedUsers, updateToken = true, updateAllowedUsers = true } = {}) {
+  token = String(token || "").trim();
+  if (updateToken && !/^[0-9]+:[A-Za-z0-9_-]{20,}$/.test(token) && token !== "") {
     throw new Error("invalid Telegram bot token");
   }
+  const normalizedAllowedUsers = updateAllowedUsers ? normalizeTelegramAllowedUsers(allowedUsers) : "";
   const path = envPath(agentId);
   let text = readText(path, "");
   if (!text) text = "";
   const beforeToken = readEnvValue(text, "TELEGRAM_BOT_TOKEN");
-  text = writeEnvValue(text, "TELEGRAM_BOT_TOKEN", token);
+  const beforeAllowedUsers = normalizeTelegramAllowedUsers(readEnvValue(text, "TELEGRAM_ALLOWED_USERS"));
+  if (updateToken) {
+    text = writeEnvValue(text, "TELEGRAM_BOT_TOKEN", token);
+  }
+  if (updateAllowedUsers) {
+    text = normalizedAllowedUsers
+      ? writeEnvValue(text, "TELEGRAM_ALLOWED_USERS", normalizedAllowedUsers)
+      : deleteEnvValue(text, "TELEGRAM_ALLOWED_USERS");
+  }
   text = writeEnvValue(text, "INFOBIZ_AGENT_IDENTITY_REV", "20260614-telegram-identity");
   writeFileSync(path, text, { encoding: "utf8", mode: 0o600 });
   ensureTelegramPlatformEnabled(agentId);
-  const sessions = beforeToken !== token ? archiveTelegramSessions(agentId) : { ok: true, removed: 0, archive: null };
+  const tokenChanged = updateToken && beforeToken !== token;
+  const allowlistChanged = updateAllowedUsers && beforeAllowedUsers !== normalizedAllowedUsers;
+  const sessions = tokenChanged || allowlistChanged
+    ? archiveTelegramSessions(agentId)
+    : { ok: true, removed: 0, archive: null };
   let restart = { ok: false, restarted: false };
   try {
     restart = restartAgentGateway(agentId);
@@ -2168,22 +2210,38 @@ function saveTelegramToken(agentId, token) {
   return { ok: true, settings: telegramSettings(agentId), restart, sessions };
 }
 
-function saveTelegramTokens(tokens) {
+function saveTelegramToken(agentId, token) {
+  return saveTelegramSettings(agentId, { token, updateToken: true, updateAllowedUsers: false });
+}
+
+function saveTelegramTokens(tokens, allowedUsers = {}) {
   if (!tokens || typeof tokens !== "object" || Array.isArray(tokens)) {
     throw new Error("tokens object required");
   }
+  if (!allowedUsers || typeof allowedUsers !== "object" || Array.isArray(allowedUsers)) {
+    throw new Error("allowedUsers object required");
+  }
   const allowed = new Set(PROFILE_ORDER);
   const results = [];
-  for (const [agentId, rawToken] of Object.entries(tokens)) {
+  const agentIds = new Set([...Object.keys(tokens), ...Object.keys(allowedUsers)]);
+  for (const agentId of agentIds) {
     if (!allowed.has(agentId)) continue;
-    const token = String(rawToken || "").trim();
-    if (!token) continue;
-    const before = telegramSettings(agentId).tokenPreview;
-    const saved = saveTelegramToken(agentId, token);
+    const hasToken = Object.prototype.hasOwnProperty.call(tokens, agentId);
+    const hasAllowedUsers = Object.prototype.hasOwnProperty.call(allowedUsers, agentId);
+    const token = String(tokens[agentId] || "").trim();
+    const before = telegramSettings(agentId);
+    const requestedAllowedUsers = hasAllowedUsers ? normalizeTelegramAllowedUsers(allowedUsers[agentId]) : before.allowedUsers;
+    if ((!hasToken || !token) && (!hasAllowedUsers || requestedAllowedUsers === before.allowedUsers)) continue;
+    const saved = saveTelegramSettings(agentId, {
+      token,
+      allowedUsers: requestedAllowedUsers,
+      updateToken: hasToken && Boolean(token),
+      updateAllowedUsers: hasAllowedUsers,
+    });
     results.push({
       profile: agentId,
       name: nameLabel(agentId),
-      changed: saved.settings.tokenPreview !== before,
+      changed: saved.settings.tokenPreview !== before.tokenPreview || saved.settings.allowedUsers !== before.allowedUsers,
       settings: saved.settings,
       restart: saved.restart,
       sessions: saved.sessions,
@@ -3542,7 +3600,7 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && url.pathname === "/api/telegram") {
       const body = await readBody(req);
-      sendJson(res, 200, saveTelegramTokens(body.tokens || {}));
+      sendJson(res, 200, saveTelegramTokens(body.tokens || {}, body.allowedUsers || {}));
       return;
     }
 
@@ -3735,7 +3793,12 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && agentTelegramMatch) {
       const body = await readBody(req);
-      sendJson(res, 200, saveTelegramToken(agentTelegramMatch[1], String(body.token || "").trim()));
+      sendJson(res, 200, saveTelegramSettings(agentTelegramMatch[1], {
+        token: String(body.token || "").trim(),
+        allowedUsers: body.allowedUsers,
+        updateToken: Object.prototype.hasOwnProperty.call(body, "token"),
+        updateAllowedUsers: Object.prototype.hasOwnProperty.call(body, "allowedUsers"),
+      }));
       return;
     }
 

@@ -6,6 +6,10 @@ HERMES_ROOT="${HERMES_ROOT:-$HOME/.hermes}"
 HERMES_AGENT_ROOT="$HERMES_ROOT/hermes-agent"
 DESIGNER_ROOT="$HERMES_ROOT/profiles/designer"
 TECH_ROOT="$HERMES_ROOT/profiles/tech"
+WEB_SHELL_ROOT="$INSTALL_ROOT/web-shell"
+VERSION="${VERSION:-0.1.0}"
+BASE_URL="${BASE_URL:-https://github.com/temaserditov/infobiz-agents-installer/releases/download/v$VERSION}"
+WEB_SHELL_URL="${WEB_SHELL_URL:-$BASE_URL/agent-web-shell-$VERSION.tar.gz}"
 HERMES_IMAGE_REFERENCE_PATCH_URL="${HERMES_IMAGE_REFERENCE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-image-reference.py}"
 TECH_NO_CODE_PATCH_URL="${TECH_NO_CODE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-tech-no-code-defaults.py}"
 
@@ -137,6 +141,21 @@ patch_tech_no_code_defaults() {
   "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" "$TECH_ROOT"
 }
 
+update_web_shell() {
+  local workdir payload
+  workdir="$(mktemp -d "${TMPDIR:-/tmp}/infobiz-web-shell.XXXXXX")"
+  payload="$workdir/agent-web-shell.tar.gz"
+  curl -fsSL "$WEB_SHELL_URL" -o "$payload"
+  tar -xzf "$payload" -C "$workdir"
+  [[ -d "$workdir/web-shell" ]] || return 1
+  mkdir -p "$WEB_SHELL_ROOT"
+  cp -a "$workdir/web-shell/public" "$WEB_SHELL_ROOT/"
+  cp -a "$workdir/web-shell/scripts" "$WEB_SHELL_ROOT/"
+  for file in server.mjs runner.py package.json README.md; do
+    [[ -f "$workdir/web-shell/$file" ]] && cp "$workdir/web-shell/$file" "$WEB_SHELL_ROOT/$file"
+  done
+}
+
 [[ "$(uname -s)" == "Linux" ]] || fail "This updater supports Linux VPS only."
 [[ -d "$HERMES_AGENT_ROOT" ]] || fail "Hermes is not installed. Run the full installer first."
 [[ -x "$HERMES_AGENT_ROOT/venv/bin/python" ]] || fail "Hermes Python venv is missing. Run the full installer first."
@@ -153,6 +172,9 @@ patch_hermes_image_reference_support
 
 say "Patching tech no-code defaults"
 patch_tech_no_code_defaults
+
+say "Updating WebShell"
+update_web_shell
 
 say "Configuring GPT-Image 2 High"
 configure_designer_image_generation

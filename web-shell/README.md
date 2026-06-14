@@ -73,6 +73,8 @@ This verifies the running local shell health endpoints without starting any agen
 - `POST /api/actions/prune-history` - prunes old local run/snapshot/approval files.
 - `POST /api/actions/cleanup-legacy` - kills detected legacy OpenClaw/browser processes.
 - `POST /api/agents/:id/reset-sessions` - archives sessions and restarts that profile gateway.
+- `POST /api/telegram` - saves per-agent Telegram bot tokens and `TELEGRAM_ALLOWED_USERS`, then restarts changed gateways.
+- `POST /api/agents/:id/telegram` - saves Telegram settings for one agent.
 
 ## Notes
 
