@@ -14,8 +14,9 @@ case "${LC_CTYPE:-}" in
 esac
 
 AGENT_PROFILE="${AGENT_PROFILE:-marketer}"
-AGENT_NAME="${AGENT_NAME:-Гермес и Маркетолог}"
-AGENT_PROFILE_ALLOW="${AGENT_PROFILE_ALLOW:-default,$AGENT_PROFILE}"
+AGENT_PROFILES="${AGENT_PROFILES:-marketer,copywriter,designer,tech}"
+AGENT_NAME="${AGENT_NAME:-Гермес и агенты}"
+AGENT_PROFILE_ALLOW="${AGENT_PROFILE_ALLOW:-default,$AGENT_PROFILES}"
 VERSION="${VERSION:-0.1.0}"
 BASE_URL="${BASE_URL:-}"
 PROFILE_URL="${PROFILE_URL:-}"
@@ -41,7 +42,6 @@ INSTALL_ROOT="$HOME/InfobizAgents"
 CONFIG_DIR="$HOME/.infobiz-agents"
 HERMES_ROOT="$HOME/.hermes"
 HERMES_AGENT_ROOT="$HERMES_ROOT/hermes-agent"
-PROFILE_ROOT="$HERMES_ROOT/profiles/$AGENT_PROFILE"
 WEB_SHELL_ROOT="$INSTALL_ROOT/web-shell"
 LOG_FILE="$INSTALL_ROOT/install.log"
 HERMES_CMD="$HERMES_AGENT_ROOT/venv/bin/hermes"
@@ -412,7 +412,8 @@ PY
 }
 
 enable_profile_telegram_platform() {
-  local config_path="$PROFILE_ROOT/config.yaml"
+  local profile_root="$1"
+  local config_path="$profile_root/config.yaml"
   "$HERMES_AGENT_ROOT/venv/bin/python" - "$config_path" <<'PY'
 from pathlib import Path
 import sys
@@ -424,6 +425,108 @@ if "platforms:" in text and "  telegram:" in text and "    enabled: true" in tex
 text = text.rstrip() + "\n\n# Infobiz Agents messaging defaults\nplatforms:\n  telegram:\n    enabled: true\n"
 path.write_text(text)
 PY
+}
+
+write_profile_env() {
+  local profile="$1"
+  local profile_root
+  if [[ "$profile" = "default" ]]; then
+    profile_root="$HERMES_ROOT"
+  else
+    profile_root="$HERMES_ROOT/profiles/$profile"
+  fi
+
+  /bin/mkdir -p "$profile_root"
+  cat > "$profile_root/.env" <<ENV
+TELEGRAM_BOT_TOKEN=''
+GATEWAY_ALLOW_ALL_USERS='true'
+HERMES_INFERENCE_PROVIDER='openai-codex'
+HERMES_INFERENCE_MODEL='gpt-5.5'
+HERMES_HOME=$(shell_quote "$profile_root")
+PATH=$(shell_quote "$SHIM_DIR:$HERMES_ROOT/node/bin:$HERMES_AGENT_ROOT/venv/bin:$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin")
+INSTALL_NAME_TOOL=$(shell_quote "$SHIM_DIR/install_name_tool")
+ENV
+  chmod 600 "$profile_root/.env"
+}
+
+install_profiles_and_skills() {
+  local profile_payload="$1"
+  local workdir="$2"
+  local profile source_dir profile_root skill_count
+  local profiles
+
+  [[ -d "$workdir/profile/agents" || -d "$workdir/profile/skills" ]] || fail "Profile payload is invalid"
+
+  /bin/mkdir -p "$HERMES_ROOT/profiles"
+  profiles=("${(@s:,:)AGENT_PROFILES}")
+  for profile in "${profiles[@]}"; do
+    profile="$(printf "%s" "$profile" | /usr/bin/xargs)"
+    [[ -n "$profile" ]] || continue
+    profile_root="$HERMES_ROOT/profiles/$profile"
+    source_dir="$workdir/profile/agents/$profile"
+
+    if [[ -d "$profile_root" ]]; then
+      backup="$HOME/.hermes.profile-$profile.backup.$(/bin/date +%Y%m%d%H%M%S)"
+      /bin/mv "$profile_root" "$backup"
+      printf "Existing profile %s moved to %s\n" "$profile" "$backup"
+    fi
+
+    create_clean_hermes_profile "$profile" || fail "Could not create clean Hermes profile: $profile"
+
+    if [[ -d "$source_dir" ]]; then
+      /usr/bin/rsync -a \
+        --exclude '.env' \
+        --exclude 'config.yaml' \
+        --exclude 'sessions/' \
+        --exclude 'logs/' \
+        --exclude 'memories/' \
+        --exclude 'test-runs/' \
+        "$source_dir/" "$profile_root/"
+    elif [[ -d "$workdir/profile/skills" ]]; then
+      /bin/mkdir -p "$profile_root/skills"
+      /usr/bin/rsync -a "$workdir/profile/skills/" "$profile_root/skills/"
+    else
+      fail "No source files found for profile: $profile"
+    fi
+
+    if [[ -d "$workdir/profile/skills" ]]; then
+      /bin/mkdir -p "$profile_root/skills"
+      /usr/bin/rsync -a "$workdir/profile/skills/" "$profile_root/skills/"
+    fi
+
+    skill_count="$(find "$profile_root/skills" -name 'SKILL.md' -type f | wc -l | tr -d ' ')"
+    [[ "$skill_count" != "0" ]] || fail "No skills were installed for profile: $profile"
+    printf "Installed %s skills for %s\n" "$skill_count" "$profile" >> "$LOG_FILE"
+
+    enable_profile_telegram_platform "$profile_root" || fail "Could not enable Telegram platform for profile: $profile"
+    write_profile_env "$profile"
+    /usr/bin/xattr -dr com.apple.quarantine "$profile_root" >/dev/null 2>&1 || true
+    /usr/bin/xattr -dr com.apple.provenance "$profile_root" >/dev/null 2>&1 || true
+    replace_student_paths "$profile_root"
+    /bin/mkdir -p "$profile_root/logs" "$profile_root/sessions" "$profile_root/cache" "$profile_root/memories" "$profile_root/cron"
+  done
+
+  if [[ -d "$workdir/profile/skills/webshell-docs" ]]; then
+    /bin/rm -rf "$HERMES_ROOT/skills/webshell-docs"
+    /usr/bin/ditto "$workdir/profile/skills/webshell-docs" "$HERMES_ROOT/skills/webshell-docs"
+  fi
+
+  if [[ -d "$workdir/profile/default" ]]; then
+    /usr/bin/rsync -a \
+      --exclude '.env' \
+      --exclude 'config.yaml' \
+      --exclude 'sessions/' \
+      --exclude 'logs/' \
+      --exclude 'memories/' \
+      --exclude 'profiles/' \
+      --exclude 'hermes-agent/' \
+      --exclude 'node/' \
+      "$workdir/profile/default/" "$HERMES_ROOT/"
+  fi
+
+  write_profile_env "default"
+  enable_profile_telegram_platform "$HERMES_ROOT" || fail "Could not enable Telegram platform for Hermes"
+  replace_student_paths "$HERMES_ROOT/skills"
 }
 
 need_web_shell_payload() {
@@ -676,52 +779,12 @@ install_hermes_from_source || fail "Hermes source install failed"
 
 [[ -x "$HERMES_CMD" ]] || fail "Hermes command not found: $HERMES_CMD"
 
-say "Installing agent profile: $AGENT_NAME"
+say "Installing agent profiles: $AGENT_NAME"
 profile_payload="$(need_profile_payload)"
 workdir="$(mktemp -d "${TMPDIR:-/tmp}/infobiz-profile.XXXXXX")"
 CLEANUP_WORKDIR="$workdir"
-run_logged "Extracting agent profile" /usr/bin/tar -xzf "$profile_payload" -C "$workdir" || fail "Could not extract agent profile"
-[[ -d "$workdir/profile/skills" ]] || fail "Profile payload is invalid: profile/skills not found"
-
-if [[ -d "$PROFILE_ROOT" ]]; then
-  backup="$HOME/.hermes.profile-$AGENT_PROFILE.backup.$(/bin/date +%Y%m%d%H%M%S)"
-  /bin/mv "$PROFILE_ROOT" "$backup"
-  printf "Existing profile moved to %s\n" "$backup"
-fi
-/bin/mkdir -p "$HERMES_ROOT/profiles"
-create_clean_hermes_profile "$AGENT_PROFILE" || fail "Could not create clean Hermes profile"
-enable_profile_telegram_platform || fail "Could not enable Telegram platform for profile"
-/usr/bin/ditto "$workdir/profile/skills" "$PROFILE_ROOT/skills"
-if [[ -d "$workdir/profile/skills/webshell-docs" ]]; then
-  /bin/rm -rf "$HERMES_ROOT/skills/webshell-docs"
-  /usr/bin/ditto "$workdir/profile/skills/webshell-docs" "$HERMES_ROOT/skills/webshell-docs"
-fi
-/usr/bin/xattr -dr com.apple.quarantine "$PROFILE_ROOT" >/dev/null 2>&1 || true
-/usr/bin/xattr -dr com.apple.provenance "$PROFILE_ROOT" >/dev/null 2>&1 || true
-replace_student_paths "$PROFILE_ROOT/skills"
-/bin/mkdir -p "$PROFILE_ROOT/logs" "$PROFILE_ROOT/sessions" "$PROFILE_ROOT/cache" "$PROFILE_ROOT/memories" "$PROFILE_ROOT/cron"
-
-say "Writing agent configuration"
-cat > "$PROFILE_ROOT/.env" <<ENV
-TELEGRAM_BOT_TOKEN=''
-GATEWAY_ALLOW_ALL_USERS='true'
-HERMES_INFERENCE_PROVIDER='openai-codex'
-HERMES_INFERENCE_MODEL='gpt-5.5'
-HERMES_HOME=$(shell_quote "$PROFILE_ROOT")
-PATH=$(shell_quote "$SHIM_DIR:$HERMES_ROOT/node/bin:$HERMES_AGENT_ROOT/venv/bin:$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin")
-INSTALL_NAME_TOOL=$(shell_quote "$SHIM_DIR/install_name_tool")
-ENV
-chmod 600 "$PROFILE_ROOT/.env"
-
-if [[ -f "$HERMES_ROOT/.env" ]]; then
-  {
-    printf "\n# Infobiz Agents defaults\n"
-    printf "GATEWAY_ALLOW_ALL_USERS='true'\n"
-    printf "HERMES_INFERENCE_PROVIDER='openai-codex'\n"
-    printf "HERMES_INFERENCE_MODEL='gpt-5.5'\n"
-    printf "INSTALL_NAME_TOOL=%s\n" "$(shell_quote "$SHIM_DIR/install_name_tool")"
-  } >> "$HERMES_ROOT/.env"
-fi
+run_logged "Extracting agent profiles" /usr/bin/tar -xzf "$profile_payload" -C "$workdir" || fail "Could not extract agent profiles"
+install_profiles_and_skills "$profile_payload" "$workdir"
 
 say "OpenAI/Hermes authorization"
 printf "The installer will open the authorization page and copy the code when Hermes prints it.\n"
@@ -729,11 +792,19 @@ run_hermes_auth || fail "OpenAI/Hermes authorization failed"
 
 say "Installing Hermes gateway services"
 run_hermes gateway install --force >> "$LOG_FILE" 2>&1 || true
-run_hermes -p "$AGENT_PROFILE" gateway install --force >> "$LOG_FILE" 2>&1 || true
+for profile in "${(@s:,:)AGENT_PROFILES}"; do
+  profile="$(printf "%s" "$profile" | /usr/bin/xargs)"
+  [[ -n "$profile" ]] || continue
+  run_hermes -p "$profile" gateway install --force >> "$LOG_FILE" 2>&1 || true
+done
 
 say "Starting Hermes gateways"
 run_hermes gateway start >> "$LOG_FILE" 2>&1 || true
-run_hermes -p "$AGENT_PROFILE" gateway start >> "$LOG_FILE" 2>&1 || true
+for profile in "${(@s:,:)AGENT_PROFILES}"; do
+  profile="$(printf "%s" "$profile" | /usr/bin/xargs)"
+  [[ -n "$profile" ]] || continue
+  run_hermes -p "$profile" gateway start >> "$LOG_FILE" 2>&1 || true
+done
 
 say "Installing local web panel"
 web_shell_url="$(install_web_shell)" || fail "Could not install local web panel"
