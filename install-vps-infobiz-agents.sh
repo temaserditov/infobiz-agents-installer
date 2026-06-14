@@ -346,6 +346,51 @@ path.write_text(text)
 PY
 }
 
+configure_designer_image_generation() {
+  local config_path="$1/config.yaml"
+  "$HERMES_AGENT_ROOT/venv/bin/python" - "$config_path" <<'PY'
+from pathlib import Path
+import sys
+
+try:
+    import yaml
+except Exception as exc:
+    raise SystemExit(f"PyYAML is required to configure designer image generation: {exc}")
+
+path = Path(sys.argv[1])
+data = yaml.safe_load(path.read_text() if path.exists() else "") or {}
+if not isinstance(data, dict):
+    data = {}
+
+platform_toolsets = data.setdefault("platform_toolsets", {})
+if not isinstance(platform_toolsets, dict):
+    platform_toolsets = {}
+    data["platform_toolsets"] = platform_toolsets
+
+for platform in ("cli", "telegram", "web"):
+    current = platform_toolsets.get(platform)
+    if not isinstance(current, list):
+        current = []
+    if "image_gen" not in current:
+        current.append("image_gen")
+    platform_toolsets[platform] = current
+
+image_gen = data.setdefault("image_gen", {})
+if not isinstance(image_gen, dict):
+    image_gen = {}
+    data["image_gen"] = image_gen
+image_gen["provider"] = "openai-codex"
+image_gen["model"] = "gpt-image-2-medium"
+openai_codex = image_gen.setdefault("openai-codex", {})
+if not isinstance(openai_codex, dict):
+    openai_codex = {}
+    image_gen["openai-codex"] = openai_codex
+openai_codex["model"] = "gpt-image-2-medium"
+
+path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False))
+PY
+}
+
 install_profiles_and_skills() {
   local payload="$TMP_ROOT/profile.tar.gz"
   local workdir="$TMP_ROOT/profile"
@@ -384,6 +429,9 @@ install_profiles_and_skills() {
     write_profile_env "$profile"
     enable_telegram_platform "$HERMES_ROOT/profiles/$profile"
     disable_profile_kanban_dispatch "$HERMES_ROOT/profiles/$profile"
+    if [[ "$profile" == "designer" ]]; then
+      configure_designer_image_generation "$HERMES_ROOT/profiles/$profile"
+    fi
   done
 
   if [[ -d "$workdir/profile/skills/webshell-docs" ]]; then

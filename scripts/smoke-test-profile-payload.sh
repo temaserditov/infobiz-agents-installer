@@ -106,6 +106,53 @@ if errors:
 print("Role identity headers look sane.")
 PY
 
+say "Checking designer image generation contract"
+python3 - "$PAYLOAD" <<'PY'
+import sys
+from pathlib import Path
+
+payload = Path(sys.argv[1])
+files = [
+    payload / "agents" / "designer" / "IMAGE_GENERATION_POLICY.md",
+    payload / "agents" / "designer" / "skills" / "gpt-image-2-generation-basic" / "SKILL.md",
+    payload / "agents" / "designer" / "COMMANDS.md",
+]
+
+errors = []
+joined = ""
+for path in files:
+    if not path.exists():
+        errors.append(f"missing {path.relative_to(payload)}")
+        continue
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    joined += "\n" + text.lower()
+
+required = [
+    "gpt-image 2",
+    "without api",
+    "image_generate",
+    "actual image",
+    "prompt-only",
+]
+for needle in required:
+    if needle not in joined:
+        errors.append(f"designer image contract missing {needle!r}")
+
+bad_phrases = [
+    "the answer must give not abstract advice, but a ready-to-use prompt",
+    "give the student a short instruction: generate through",
+]
+for phrase in bad_phrases:
+    if phrase in joined:
+        errors.append(f"old prompt-only wording still present: {phrase!r}")
+
+if errors:
+    print("\n".join(errors))
+    raise SystemExit(1)
+
+print("Designer image generation contract looks direct.")
+PY
+
 if [[ "${LIVE_SMOKE:-0}" == "1" ]]; then
   say "Running optional live greeting smoke test"
   PROFILE="${PROFILE:-marketer}"

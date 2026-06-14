@@ -581,6 +581,52 @@ path.write_text(text)
 PY
 }
 
+configure_designer_image_generation() {
+  local profile_root="$1"
+  local config_path="$profile_root/config.yaml"
+  "$HERMES_AGENT_ROOT/venv/bin/python" - "$config_path" <<'PY'
+from pathlib import Path
+import sys
+
+try:
+    import yaml
+except Exception as exc:
+    raise SystemExit(f"PyYAML is required to configure designer image generation: {exc}")
+
+path = Path(sys.argv[1])
+data = yaml.safe_load(path.read_text() if path.exists() else "") or {}
+if not isinstance(data, dict):
+    data = {}
+
+platform_toolsets = data.setdefault("platform_toolsets", {})
+if not isinstance(platform_toolsets, dict):
+    platform_toolsets = {}
+    data["platform_toolsets"] = platform_toolsets
+
+for platform in ("cli", "telegram", "web"):
+    current = platform_toolsets.get(platform)
+    if not isinstance(current, list):
+        current = []
+    if "image_gen" not in current:
+        current.append("image_gen")
+    platform_toolsets[platform] = current
+
+image_gen = data.setdefault("image_gen", {})
+if not isinstance(image_gen, dict):
+    image_gen = {}
+    data["image_gen"] = image_gen
+image_gen["provider"] = "openai-codex"
+image_gen["model"] = "gpt-image-2-medium"
+openai_codex = image_gen.setdefault("openai-codex", {})
+if not isinstance(openai_codex, dict):
+    openai_codex = {}
+    image_gen["openai-codex"] = openai_codex
+openai_codex["model"] = "gpt-image-2-medium"
+
+path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False))
+PY
+}
+
 install_profiles_and_skills() {
   local profile_payload="$1"
   local workdir="$2"
@@ -632,6 +678,9 @@ install_profiles_and_skills() {
 
     enable_profile_telegram_platform "$profile_root" || fail "Could not enable Telegram platform for profile: $profile"
     disable_profile_kanban_dispatch "$profile_root" || fail "Could not configure multi-gateway mode for profile: $profile"
+    if [[ "$profile" == "designer" ]]; then
+      configure_designer_image_generation "$profile_root" || fail "Could not configure GPT-Image 2 for designer"
+    fi
     write_profile_env "$profile"
     /usr/bin/xattr -dr com.apple.quarantine "$profile_root" >/dev/null 2>&1 || true
     /usr/bin/xattr -dr com.apple.provenance "$profile_root" >/dev/null 2>&1 || true
