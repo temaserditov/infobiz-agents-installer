@@ -18,6 +18,7 @@ const HERMES_PYTHON = process.env.HERMES_PYTHON || join(HERMES_AGENT_ROOT, "venv
 const HERMES_WORKSPACES_ROOT = process.env.HERMES_WORKSPACES_ROOT || join(HOME_DIR, ".hermes-workspaces");
 const WORKSPACE_ROOT = process.env.AGENT_WORKSPACE || join(HOME_DIR, "InfobizAgents", "workspace");
 const OBSIDIAN_VAULT = process.env.OBSIDIAN_VAULT || join(HOME_DIR, "InfobizAgents", "obsidian-vault");
+const INSTALL_ROOT = process.env.INSTALL_ROOT || resolve(join(__dirname, ".."));
 const RUNS_DIR = join(__dirname, "runs");
 const APPROVALS_DIR = join(__dirname, "approvals");
 const SNAPSHOTS_DIR = join(__dirname, "snapshots");
@@ -662,6 +663,47 @@ function runCommand(command, args, options = {}) {
     code: result.status ?? (result.error ? 127 : 0),
     stdout: result.stdout || "",
     stderr: result.stderr || result.error?.message || "",
+  };
+}
+
+function redactSensitiveText(value) {
+  return String(value || "")
+    .replace(/\b\d{6,}:[A-Za-z0-9_-]{20,}\b/g, "[telegram-token]")
+    .replace(/\bsk-proj-[A-Za-z0-9_-]{20,}\b/g, "[openai-key]")
+    .replace(/\bsk-[A-Za-z0-9_-]{20,}\b/g, "[openai-key]")
+    .replace(/(Authorization:\s*Bearer\s+)[^\s"'<>]+/gi, "$1[redacted]")
+    .replace(/((?:OPENAI_API_KEY|TELEGRAM_BOT_TOKEN|WEB_SHELL_ACCESS_TOKEN|INFOBIZ_SUPPORT_TOKEN|TOKEN|SECRET|PASSWORD|AUTH|BEARER)\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;]+)/gi, "$1[redacted]");
+}
+
+function redactSensitive(value) {
+  if (typeof value === "string") return redactSensitiveText(value);
+  if (Array.isArray(value)) return value.map((item) => redactSensitive(item));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => {
+      if (/token|secret|password|authorization|api[_-]?key/i.test(key)) {
+        return [key, item ? "[redacted]" : item];
+      }
+      return [key, redactSensitive(item)];
+    }));
+  }
+  return value;
+}
+
+function safeCommand(command, args, options = {}) {
+  const result = runCommand(command, args, options);
+  return {
+    command: [command, ...args].join(" "),
+    code: result.code,
+    stdout: redactSensitiveText(result.stdout).slice(-20_000),
+    stderr: redactSensitiveText(result.stderr).slice(-20_000),
+  };
+}
+
+function safeTail(path, count = 220) {
+  return {
+    path,
+    exists: existsSync(path),
+    text: redactSensitiveText(tailLines(path, count)).slice(-30_000),
   };
 }
 
@@ -2419,6 +2461,7 @@ function webToolPolicySummary() {
 function routeSummary() {
   const routes = [
     { method: "GET", path: "/api/agents", group: "agents", description: "список профилей и статус gateway" },
+    { method: "GET", path: "/api/support/bundle", group: "support", description: "read-only пакет диагностики для временной поддержки" },
     { method: "GET", path: "/api/control-center", group: "diagnostics", description: "короткий верхний статус ключевых diagnostics checks" },
     { method: "GET", path: "/api/next-fixes", group: "diagnostics", description: "автоматический список следующих безопасных фиксов" },
     { method: "GET", path: "/api/profile-footprint", group: "diagnostics", description: "сравнение профилей по активным/disabled skills, readiness и свежим логам" },
@@ -2486,6 +2529,111 @@ function healthSummary() {
       .filter((run) => ["starting", "running"].includes(run.status))
       .map((run) => safeRun(run, { includeEvents: false })),
   };
+}
+
+function supportSection(name, fn) {
+  try {
+    return { ok: true, value: fn() };
+  } catch (error) {
+    return { ok: false, error: String(error?.message || error) };
+  }
+}
+
+function supportProcessRows() {
+  return inspectProcessText()
+    .split(/\r?\n/)
+    .filter((line) => /hermes|infobiz|server\.mjs|gateway run|node .*web-shell/i.test(line))
+    .filter((line) => !/ rg |sed -n|ps -axo/.test(line))
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 80);
+}
+
+function supportServiceSummary() {
+  if (process.platform === "linux") {
+    const services = ["infobiz-web-shell.service", ...PROFILE_ORDER.map((id) => systemdGatewayService(id))];
+    return {
+      platform: "linux",
+      services: services.map((service) => ({
+        service,
+        isActive: safeCommand("systemctl", ["is-active", service]),
+        status: safeCommand("systemctl", ["status", service, "--no-pager", "-l"]),
+        journal: safeCommand("journalctl", ["-u", service, "-n", "80", "--no-pager"]),
+      })),
+    };
+  }
+  if (process.platform === "darwin") {
+    const uid = String(process.getuid?.() || 501);
+    const webShellLabel = "com.infobiz.agents.web-shell";
+    return {
+      platform: "darwin",
+      uid,
+      launchctl: {
+        webShell: safeCommand("launchctl", ["print", `gui/${uid}/${webShellLabel}`]),
+        gateways: launchctlGatewayRows(),
+      },
+      plists: [
+        safeTail(join(LAUNCH_AGENTS_DIR, `${webShellLabel}.plist`), 260),
+        ...PROFILE_ORDER.map((id) => safeTail(join(LAUNCH_AGENTS_DIR, `${gatewayLabel(id)}.plist`), 180)),
+      ],
+    };
+  }
+  return { platform: process.platform, note: "service summary is not implemented for this platform" };
+}
+
+function supportBundle() {
+  const agents = PROFILE_ORDER
+    .filter((id) => existsSync(profileDir(id)))
+    .map((id) => ({
+      id,
+      name: nameLabel(id),
+      diagnostics: supportSection("diagnostics", () => agentDiagnostics(id)),
+      telegram: supportSection("telegram", () => telegramSettings(id)),
+      logs: {
+        gateway: safeTail(join(profileDir(id), "logs", "gateway.log"), 260),
+        gatewayError: safeTail(join(profileDir(id), "logs", "gateway.error.log"), 180),
+      },
+    }));
+  const bundle = {
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    runtime: {
+      platform: process.platform,
+      arch: process.arch,
+      pid: process.pid,
+      host: HOST,
+      port: PORT,
+      homeDir: HOME_DIR,
+      installRoot: INSTALL_ROOT,
+      webShellRoot: __dirname,
+      hermesRoot: HERMES_ROOT,
+      hermesAgentRoot: HERMES_AGENT_ROOT,
+      workspaceRoot: WORKSPACE_ROOT,
+      obsidianVault: OBSIDIAN_VAULT,
+      profileOrder: PROFILE_ORDER,
+      accessTokenEnabled: Boolean(WEB_SHELL_ACCESS_TOKEN),
+    },
+    summaries: {
+      agents: supportSection("agents", () => listAgents()),
+      controlCenter: supportSection("controlCenter", () => controlCenterSummary()),
+      health: supportSection("health", () => healthSummary()),
+      readiness: supportSection("readiness", () => readinessSummary()),
+      gatewayRuntime: supportSection("gatewayRuntime", () => gatewayRuntimeSummary()),
+      incidents: supportSection("incidents", () => incidentSummary()),
+      logTrends: supportSection("logTrends", () => logTrendSummary()),
+      telegram: supportSection("telegram", () => telegramSettingsAll()),
+    },
+    agents,
+    logs: {
+      webShellOut: safeTail(join(INSTALL_ROOT, "web-shell.out.log"), 260),
+      webShellErr: safeTail(join(INSTALL_ROOT, "web-shell.err.log"), 260),
+      install: safeTail(join(INSTALL_ROOT, "install.log"), 180),
+      update: safeTail(join(INSTALL_ROOT, "update.log"), 180),
+    },
+    processes: supportSection("processes", () => supportProcessRows()),
+    services: supportSection("services", () => supportServiceSummary()),
+  };
+  return redactSensitive(bundle);
 }
 
 function createSnapshot() {
@@ -2838,6 +2986,7 @@ function handleAccessToken(req, res, url) {
   if (!WEB_SHELL_ACCESS_TOKEN) return true;
   if (isLocalRequest(req)) return true;
   if (url.searchParams.get("token") === WEB_SHELL_ACCESS_TOKEN) {
+    if (url.pathname.startsWith("/api/")) return true;
     url.searchParams.delete("token");
     const location = `${url.pathname}${url.search}${url.hash}` || "/";
     res.writeHead(302, {
@@ -3221,6 +3370,15 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/api/agents") {
       sendJson(res, 200, { agents: listAgents() });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/support/bundle") {
+      if (!WEB_SHELL_ACCESS_TOKEN) {
+        sendJson(res, 403, { error: "support mode is not enabled" });
+        return;
+      }
+      sendJson(res, 200, supportBundle());
       return;
     }
 
