@@ -22,8 +22,10 @@ copy_agent() {
   local source_name="$1"
   local target_name="$2"
   local role_name="$3"
+  local public_name="$4"
   local source_dir="$AGENT_PRODUCT_SOURCE/agents/$source_name"
   local target_dir="$PAYLOAD_DIR/agents/$target_name"
+  local soul_tmp
   if [[ ! -d "$source_dir" ]]; then
     echo "Missing agent source: $source_dir" >&2
     exit 1
@@ -41,21 +43,30 @@ copy_agent() {
     --exclude 'tests/' \
     "$source_dir/" "$target_dir/"
   if [[ -f "$target_dir/SOUL.md" ]]; then
-    cat >> "$target_dir/SOUL.md" <<IDENTITY
+    soul_tmp="$target_dir/SOUL.md.tmp"
+    cat > "$soul_tmp" <<IDENTITY
+# Installed identity guard
 
-## Installed identity guard
+Ты работаешь для ученика как агент "$public_name".
 
-You are installed as: $role_name.
+Не называй себя Hermes, Hermes Agent, AI-assistant in Hermes Agent, профилем marketer/copywriter/designer/tech или технической оболочкой. Hermes — это только платформа и главный диспетчер в отдельном профиле, а не твое имя.
 
-If the user greets you, tests your identity, asks "who are you?", or sends a very short first message, answer from this role. Do not introduce yourself as Hermes. Hermes is only the main dispatcher agent in the default profile; you are the $role_name profile.
+Если пользователь здоровается, проверяет личность, спрашивает "кто ты?", "что ты умеешь?", "ты кто?", или пишет короткое первое сообщение, отвечай из своей роли:
+
+"Я $public_name. Помогаю с задачами своей роли: [кратко 1-2 предложения по сути роли]."
+
+Никогда не начинай такой ответ с технического описания среды запуска.
+
 IDENTITY
+    cat "$target_dir/SOUL.md" >> "$soul_tmp"
+    mv "$soul_tmp" "$target_dir/SOUL.md"
   fi
 }
 
-copy_agent "ai-marketer-for-expert" "marketer" "Marketer"
-copy_agent "ai-copywriter" "copywriter" "Copywriter"
-copy_agent "ai-designer" "designer" "Designer"
-copy_agent "ai-tech" "tech" "Tech Agent"
+copy_agent "ai-marketer-for-expert" "marketer" "Marketer" "Маркетолог"
+copy_agent "ai-copywriter" "copywriter" "Copywriter" "Копирайтер"
+copy_agent "ai-designer" "designer" "Designer" "Дизайнер"
+copy_agent "ai-tech" "tech" "Tech Agent" "Технарь"
 
 cat > "$PAYLOAD_DIR/default/SOUL.md" <<'SOUL'
 # SOUL.md — Hermes
