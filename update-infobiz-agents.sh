@@ -168,7 +168,7 @@ update_copywriter_profile() {
   local workdir payload source_dir backup_dir item
   workdir="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/infobiz-profile.XXXXXX")"
   payload="$workdir/profile.tar.gz"
-  backup_dir="$COPYWRITER_ROOT/.infobiz-update-backup.$(/bin/date +%Y%m%d%H%M%S)"
+  backup_dir="$HERMES_ROOT/.archives/copywriter-update.$(/bin/date +%Y%m%d%H%M%S)"
   /usr/bin/curl -fsSL "$PROFILE_URL" -o "$payload"
   /usr/bin/tar -xzf "$payload" -C "$workdir"
   source_dir="$workdir/profile/agents/copywriter"
