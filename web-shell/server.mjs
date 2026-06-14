@@ -602,10 +602,21 @@ function launchctlGatewayRows() {
   return rows;
 }
 
-function expectedGatewayCommandMatches(profile, command) {
+function processEnvValue(pid, key) {
+  if (!pid || process.platform !== "linux") return "";
+  try {
+    const envText = readFileSync(`/proc/${pid}/environ`, "utf8");
+    const prefix = `${key}=`;
+    return envText.split("\0").find((item) => item.startsWith(prefix))?.slice(prefix.length) || "";
+  } catch {
+    return "";
+  }
+}
+
+function expectedGatewayCommandMatches(profile, command, pid = null) {
   if (!command.includes("hermes_cli.main") || !command.includes("gateway run")) return false;
   if (profile === "default") return !command.includes("--profile ");
-  return command.includes(`--profile ${profile}`);
+  return command.includes(`--profile ${profile}`) || processEnvValue(pid, "HERMES_HOME") === profileDir(profile);
 }
 
 function gatewayRuntimeSummary() {
@@ -617,8 +628,8 @@ function gatewayRuntimeSummary() {
     const alive = isPidAlive(pid);
     const command = alive ? processCommand(pid) : "";
     const launch = launchRows[label] || null;
-    const commandMatches = alive && expectedGatewayCommandMatches(id, command);
-    const launchMatches = Boolean(launch?.pid && pid && Number(launch.pid) === Number(pid));
+    const commandMatches = alive && expectedGatewayCommandMatches(id, command, pid);
+    const launchMatches = process.platform === "darwin" ? Boolean(launch?.pid && pid && Number(launch.pid) === Number(pid)) : alive;
     return {
       id,
       name: nameLabel(id),
@@ -1914,10 +1925,9 @@ function restartAgentGateway(agentId) {
   const hermes = join(HERMES_AGENT_ROOT, "venv", "bin", "hermes");
   const command = existsSync(hermes) ? hermes : HERMES_PYTHON;
   const commandPrefix = existsSync(hermes) ? [] : [join(HERMES_AGENT_ROOT, "cli.py")];
-  const profileArgs = agentId === "default" ? [] : ["-p", agentId];
   const env = {
     ...process.env,
-    HERMES_HOME: HERMES_ROOT,
+    HERMES_HOME: dir,
     PATH: [
       LOCAL_BIN,
       join(HERMES_ROOT, "node", "bin"),
@@ -1925,9 +1935,9 @@ function restartAgentGateway(agentId) {
       process.env.PATH || "",
     ].filter(Boolean).join(":"),
   };
-  const install = runCommand(command, [...commandPrefix, ...profileArgs, "gateway", "install", "--force"], { env, cwd: HERMES_AGENT_ROOT });
+  const install = runCommand(command, [...commandPrefix, "gateway", "install", "--force"], { env, cwd: HERMES_AGENT_ROOT });
   if (install.code !== 0) errors.push(`hermes gateway install ${label}: ${install.stderr || install.stdout || `exit ${install.code}`}`);
-  const start = runCommand(command, [...commandPrefix, ...profileArgs, "gateway", "start"], { env, cwd: HERMES_AGENT_ROOT });
+  const start = runCommand(command, [...commandPrefix, "gateway", "start"], { env, cwd: HERMES_AGENT_ROOT });
   if (start.code === 0) return { ok: true, restarted: true, method: "hermes-gateway-start", label };
   errors.push(`hermes gateway start ${label}: ${start.stderr || start.stdout || `exit ${start.code}`}`);
   return { ok: false, restarted: false, label, error: errors.join("\n").slice(0, 2000) };

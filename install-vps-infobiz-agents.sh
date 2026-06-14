@@ -420,7 +420,7 @@ ENV
 }
 
 install_gateway_systemd_services() {
-  local profile service profile_arg
+  local profile service profile_home
   if [[ "$AGENT_PROFILE_ALLOW" != *"producer"* ]]; then
     systemctl disable --now infobiz-hermes-gateway-producer.service >/dev/null 2>&1 || true
     rm -f /etc/systemd/system/infobiz-hermes-gateway-producer.service
@@ -428,11 +428,11 @@ install_gateway_systemd_services() {
   for profile in default marketer copywriter designer tech; do
     if [[ "$profile" == "default" ]]; then
       service="infobiz-hermes-gateway.service"
-      profile_arg=""
+      profile_home="$HERMES_ROOT"
     else
       [[ -d "$HERMES_ROOT/profiles/$profile" ]] || continue
       service="infobiz-hermes-gateway-$profile.service"
-      profile_arg="-p $profile"
+      profile_home="$HERMES_ROOT/profiles/$profile"
     fi
     cat > "/etc/systemd/system/$service" <<SERVICE
 [Unit]
@@ -444,10 +444,10 @@ Wants=network-online.target
 Type=simple
 User=$(id -un)
 WorkingDirectory=$INSTALL_ROOT/workspace
-ExecStart=$HERMES_CMD $profile_arg gateway run
+ExecStart=$HERMES_CMD gateway run
 Restart=always
 RestartSec=5
-Environment=HERMES_HOME=$HERMES_ROOT
+Environment=HERMES_HOME=$profile_home
 Environment=PATH=$HERMES_ROOT/node/bin:$HERMES_AGENT_ROOT/venv/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 
 [Install]

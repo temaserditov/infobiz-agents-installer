@@ -7,6 +7,8 @@ WEB_SHELL_URL="${WEB_SHELL_URL:-$BASE_URL/agent-web-shell-$VERSION.tar.gz}"
 PROFILE_URL="${PROFILE_URL:-$BASE_URL/infobiz-agent-profile-marketer-$VERSION.tar.gz}"
 INSTALL_ROOT="${INSTALL_ROOT:-$HOME/InfobizAgents}"
 HERMES_ROOT="${HERMES_ROOT:-$HOME/.hermes}"
+HERMES_AGENT_ROOT="$HERMES_ROOT/hermes-agent"
+HERMES_CMD="$HERMES_AGENT_ROOT/venv/bin/hermes"
 WEB_SHELL_ROOT="$INSTALL_ROOT/web-shell"
 TMP_ROOT="${TMPDIR:-/tmp}/infobiz-vps-update.$$"
 AGENT_PROFILE_ALLOW="${AGENT_PROFILE_ALLOW:-default,marketer,copywriter,designer,tech}"
@@ -19,6 +21,44 @@ trap cleanup EXIT
 
 say() {
   printf "==> %s\n" "$1"
+}
+
+repair_gateway_systemd_services() {
+  local profile service profile_home
+  command -v systemctl >/dev/null 2>&1 || return 0
+  systemctl disable --now infobiz-hermes-gateway-producer.service >/dev/null 2>&1 || true
+  rm -f /etc/systemd/system/infobiz-hermes-gateway-producer.service
+  for profile in default marketer copywriter designer tech; do
+    if [[ "$profile" == "default" ]]; then
+      service="infobiz-hermes-gateway.service"
+      profile_home="$HERMES_ROOT"
+    else
+      [[ -d "$HERMES_ROOT/profiles/$profile" ]] || continue
+      service="infobiz-hermes-gateway-$profile.service"
+      profile_home="$HERMES_ROOT/profiles/$profile"
+    fi
+    cat > "/etc/systemd/system/$service" <<SERVICE
+[Unit]
+Description=Infobiz Hermes Gateway $profile
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$(id -un)
+WorkingDirectory=$INSTALL_ROOT/workspace
+ExecStart=$HERMES_CMD gateway run
+Restart=always
+RestartSec=5
+Environment=HERMES_HOME=$profile_home
+Environment=PATH=$HERMES_ROOT/node/bin:$HERMES_AGENT_ROOT/venv/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+    systemctl enable "$service" >/dev/null 2>&1 || true
+  done
+  systemctl daemon-reload
 }
 
 if [[ "$(uname -s)" != "Linux" ]]; then
@@ -116,6 +156,9 @@ if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload
   fi
 fi
+
+say "Repairing gateway services"
+repair_gateway_systemd_services
 
 if [[ -f "$INSTALL_ROOT/vps.env" ]]; then
   if grep -q '^AGENT_PROFILE_ALLOW=' "$INSTALL_ROOT/vps.env"; then
