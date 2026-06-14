@@ -804,7 +804,8 @@ function closeSettings() {
 
 async function saveTelegramSettings() {
   els.telegramSave.disabled = true;
-  renderTelegramSettings("Сохраняю токены и перезапускаю Telegram…");
+  els.telegramStatus.className = "settings-status";
+  els.telegramStatus.textContent = "Сохраняю токены и перезапускаю Telegram…";
   try {
     const tokens = {};
     for (const input of els.telegramAgentTokens.querySelectorAll(".telegram-token-input")) {
