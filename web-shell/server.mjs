@@ -645,12 +645,12 @@ function tailLines(path, count = 120) {
   return text.split(/\r?\n/).slice(-count).join("\n");
 }
 
-function runCommand(command, args) {
-  const result = spawnSync(command, args, { encoding: "utf8" });
+function runCommand(command, args, options = {}) {
+  const result = spawnSync(command, args, { encoding: "utf8", ...options });
   return {
-    code: result.status,
+    code: result.status ?? (result.error ? 127 : 0),
     stdout: result.stdout || "",
-    stderr: result.stderr || "",
+    stderr: result.stderr || result.error?.message || "",
   };
 }
 
@@ -1882,21 +1882,55 @@ function resetAgentSessions(agentId) {
 function restartAgentGateway(agentId) {
   const dir = profileDir(agentId);
   if (!existsSync(dir)) throw new Error(`profile not found: ${agentId}`);
+  const errors = [];
   if (process.platform === "linux") {
     const service = systemdGatewayService(agentId);
     const restart = runCommand("systemctl", ["restart", service]);
-    if (restart.code !== 0) {
-      return { ok: false, restarted: false, label: service, error: restart.stderr || restart.stdout || `systemctl restart exited ${restart.code}` };
-    }
-    return { ok: true, restarted: true, label: service };
+    if (restart.code === 0) return { ok: true, restarted: true, method: "systemd", label: service };
+    errors.push(`systemctl ${service}: ${restart.stderr || restart.stdout || `exit ${restart.code}`}`);
   }
-  const uid = String(process.getuid?.() || 501);
+
   const label = gatewayLabel(agentId);
-  const plist = join(LAUNCH_AGENTS_DIR, `${label}.plist`);
-  runCommand("launchctl", ["bootout", `gui/${uid}/${label}`]);
-  if (existsSync(plist)) runCommand("launchctl", ["bootstrap", `gui/${uid}`, plist]);
-  runCommand("launchctl", ["kickstart", "-k", `gui/${uid}/${label}`]);
-  return { ok: true, restarted: true, label };
+  if (process.platform === "darwin") {
+    const uid = String(process.getuid?.() || 501);
+    const target = `gui/${uid}/${label}`;
+    const plist = join(LAUNCH_AGENTS_DIR, `${label}.plist`);
+    const kick = runCommand("launchctl", ["kickstart", "-k", target]);
+    if (kick.code === 0) return { ok: true, restarted: true, method: "launchctl-kickstart", label };
+    errors.push(`launchctl kickstart ${label}: ${kick.stderr || kick.stdout || `exit ${kick.code}`}`);
+
+    runCommand("launchctl", ["bootout", target]);
+    if (existsSync(plist)) {
+      const bootstrap = runCommand("launchctl", ["bootstrap", `gui/${uid}`, plist]);
+      if (bootstrap.code !== 0) errors.push(`launchctl bootstrap ${label}: ${bootstrap.stderr || bootstrap.stdout || `exit ${bootstrap.code}`}`);
+    } else {
+      errors.push(`launch plist not found: ${plist}`);
+    }
+    const secondKick = runCommand("launchctl", ["kickstart", "-k", target]);
+    if (secondKick.code === 0) return { ok: true, restarted: true, method: "launchctl-bootstrap", label };
+    errors.push(`launchctl second kickstart ${label}: ${secondKick.stderr || secondKick.stdout || `exit ${secondKick.code}`}`);
+  }
+
+  const hermes = join(HERMES_AGENT_ROOT, "venv", "bin", "hermes");
+  const command = existsSync(hermes) ? hermes : HERMES_PYTHON;
+  const commandPrefix = existsSync(hermes) ? [] : [join(HERMES_AGENT_ROOT, "cli.py")];
+  const profileArgs = agentId === "default" ? [] : ["-p", agentId];
+  const env = {
+    ...process.env,
+    HERMES_HOME: HERMES_ROOT,
+    PATH: [
+      LOCAL_BIN,
+      join(HERMES_ROOT, "node", "bin"),
+      join(HERMES_AGENT_ROOT, "venv", "bin"),
+      process.env.PATH || "",
+    ].filter(Boolean).join(":"),
+  };
+  const install = runCommand(command, [...commandPrefix, ...profileArgs, "gateway", "install", "--force"], { env, cwd: HERMES_AGENT_ROOT });
+  if (install.code !== 0) errors.push(`hermes gateway install ${label}: ${install.stderr || install.stdout || `exit ${install.code}`}`);
+  const start = runCommand(command, [...commandPrefix, ...profileArgs, "gateway", "start"], { env, cwd: HERMES_AGENT_ROOT });
+  if (start.code === 0) return { ok: true, restarted: true, method: "hermes-gateway-start", label };
+  errors.push(`hermes gateway start ${label}: ${start.stderr || start.stdout || `exit ${start.code}`}`);
+  return { ok: false, restarted: false, label, error: errors.join("\n").slice(0, 2000) };
 }
 
 function archiveAgentSessions(agentId, reason = "web-archive") {
@@ -1944,6 +1978,14 @@ function writeEnvValue(text, key, value) {
   return `${text.replace(/\s*$/, "")}\n${line}\n`;
 }
 
+function ensureTelegramPlatformEnabled(agentId) {
+  const configPath = join(profileDir(agentId), "config.yaml");
+  let text = readText(configPath, "");
+  if (/^platforms:\s*$/m.test(text) && /(^|\n)  telegram:\s*\n(?:    .*\n)*?    enabled:\s*true\b/m.test(text)) return;
+  text = `${text.replace(/\s*$/, "")}\n\n# Infobiz Agents messaging defaults\nplatforms:\n  telegram:\n    enabled: true\n`;
+  writeFileSync(configPath, text, { encoding: "utf8", mode: 0o600 });
+}
+
 function telegramSettings(agentId) {
   const path = envPath(agentId);
   const text = readText(path, "");
@@ -1979,6 +2021,7 @@ function saveTelegramToken(agentId, token) {
   if (!text) text = "";
   text = writeEnvValue(text, "TELEGRAM_BOT_TOKEN", token);
   writeFileSync(path, text, { encoding: "utf8", mode: 0o600 });
+  ensureTelegramPlatformEnabled(agentId);
   let restart = { ok: false, restarted: false };
   try {
     restart = restartAgentGateway(agentId);

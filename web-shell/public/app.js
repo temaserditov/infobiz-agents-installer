@@ -816,8 +816,15 @@ async function saveTelegramSettings() {
       body: JSON.stringify({ tokens }),
     });
     state.telegramSettings = data.settings;
-    const changed = data.results?.filter((item) => item.changed).length || 0;
-    renderTelegramSettings(changed ? `Сохранено токенов: ${changed}` : "Новые токены не введены");
+    const results = data.results || [];
+    const restarted = results.filter((item) => item.restart?.restarted).length;
+    const failed = results.filter((item) => item.restart && !item.restart.restarted);
+    if (failed.length) {
+      els.telegramStatus.className = "settings-status error";
+      els.telegramStatus.textContent = `Токен сохранен, но Telegram не перезапустился: ${failed.map((item) => item.name || item.profile).join(", ")}`;
+    } else {
+      renderTelegramSettings(results.length ? `Сохранено и перезапущено: ${restarted} из ${results.length}` : "Новые токены не введены");
+    }
     await refreshSidebar();
   } catch (error) {
     els.telegramStatus.className = "settings-status error";
