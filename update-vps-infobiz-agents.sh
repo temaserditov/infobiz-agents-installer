@@ -82,6 +82,68 @@ path.write_text(text)
 PY
 }
 
+enable_telegram_platform() {
+  local profile_root="$1"
+  local config_path="$profile_root/config.yaml"
+  "$HERMES_AGENT_ROOT/venv/bin/python" - "$config_path" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text() if path.exists() else ""
+if "platforms:" in text and "  telegram:" in text and "    enabled: true" in text:
+    raise SystemExit(0)
+text = text.rstrip() + "\n\n# Infobiz Agents messaging defaults\nplatforms:\n  telegram:\n    enabled: true\n"
+path.write_text(text)
+PY
+}
+
+configure_designer_image_generation() {
+  local profile_root="$1"
+  local config_path="$profile_root/config.yaml"
+  "$HERMES_AGENT_ROOT/venv/bin/python" - "$config_path" <<'PY'
+from pathlib import Path
+import sys
+
+try:
+    import yaml
+except Exception as exc:
+    raise SystemExit(f"PyYAML is required to configure designer image generation: {exc}")
+
+path = Path(sys.argv[1])
+data = yaml.safe_load(path.read_text() if path.exists() else "") or {}
+if not isinstance(data, dict):
+    data = {}
+
+platform_toolsets = data.setdefault("platform_toolsets", {})
+if not isinstance(platform_toolsets, dict):
+    platform_toolsets = {}
+    data["platform_toolsets"] = platform_toolsets
+
+for platform in ("cli", "telegram", "web"):
+    current = platform_toolsets.get(platform)
+    if not isinstance(current, list):
+        current = []
+    if "image_gen" not in current:
+        current.append("image_gen")
+    platform_toolsets[platform] = current
+
+image_gen = data.setdefault("image_gen", {})
+if not isinstance(image_gen, dict):
+    image_gen = {}
+    data["image_gen"] = image_gen
+image_gen["provider"] = "openai-codex"
+image_gen["model"] = "gpt-image-2-high"
+openai_codex = image_gen.setdefault("openai-codex", {})
+if not isinstance(openai_codex, dict):
+    openai_codex = {}
+    image_gen["openai-codex"] = openai_codex
+openai_codex["model"] = "gpt-image-2-high"
+
+path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False))
+PY
+}
+
 if [[ "$(uname -s)" != "Linux" ]]; then
   echo "This updater supports Linux VPS only." >&2
   exit 1
@@ -148,7 +210,11 @@ for profile in "${profiles[@]}"; do
     mkdir -p "$HERMES_ROOT/profiles/$profile/skills"
     rsync -a "$TMP_ROOT/profiles/profile/skills/" "$HERMES_ROOT/profiles/$profile/skills/"
   fi
+  enable_telegram_platform "$HERMES_ROOT/profiles/$profile" || true
   disable_profile_kanban_dispatch "$HERMES_ROOT/profiles/$profile" || true
+  if [[ "$profile" == "designer" ]]; then
+    configure_designer_image_generation "$HERMES_ROOT/profiles/$profile" || true
+  fi
   if [[ -f "$HERMES_ROOT/profiles/$profile/.env" ]] && ! grep -q '^HERMES_KANBAN_DISPATCH_IN_GATEWAY=' "$HERMES_ROOT/profiles/$profile/.env"; then
     printf "HERMES_KANBAN_DISPATCH_IN_GATEWAY='false'\n" >> "$HERMES_ROOT/profiles/$profile/.env"
   fi

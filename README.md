@@ -131,6 +131,13 @@ BASE_URL="https://github.com/USER/REPO/releases/download/v0.1.0" \
   /bin/zsh -c "$(curl -fsSL https://raw.githubusercontent.com/USER/REPO/main/install-infobiz-agents.sh)"
 ```
 
+Direct macOS debug update for an already installed local Mac:
+
+```bash
+BASE_URL="https://github.com/temaserditov/infobiz-agents-installer/releases/download/v0.1.0" \
+  /bin/zsh -c "$(curl -fsSL https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/update-infobiz-agents.sh)"
+```
+
 ## VPS install internals
 
 Recommended VPS:
