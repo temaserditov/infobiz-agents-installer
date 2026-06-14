@@ -61,6 +61,27 @@ SERVICE
   systemctl daemon-reload
 }
 
+disable_profile_kanban_dispatch() {
+  local profile_root="$1"
+  local config_path="$profile_root/config.yaml"
+  python3 - "$config_path" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text() if path.exists() else ""
+if re.search(r"(?m)^kanban:\s*$", text):
+    if re.search(r"(?m)^  dispatch_in_gateway:\s*(?:true|false)\s*$", text):
+        text = re.sub(r"(?m)^  dispatch_in_gateway:\s*(?:true|false)\s*$", "  dispatch_in_gateway: false", text)
+    else:
+        text = re.sub(r"(?m)^kanban:\s*$", "kanban:\n  dispatch_in_gateway: false", text, count=1)
+else:
+    text = text.rstrip() + "\n\n# Infobiz Agents multi-gateway defaults\nkanban:\n  dispatch_in_gateway: false\n"
+path.write_text(text)
+PY
+}
+
 if [[ "$(uname -s)" != "Linux" ]]; then
   echo "This updater supports Linux VPS only." >&2
   exit 1
@@ -126,6 +147,10 @@ for profile in "${profiles[@]}"; do
   elif [[ -d "$TMP_ROOT/profiles/profile/skills" ]]; then
     mkdir -p "$HERMES_ROOT/profiles/$profile/skills"
     rsync -a "$TMP_ROOT/profiles/profile/skills/" "$HERMES_ROOT/profiles/$profile/skills/"
+  fi
+  disable_profile_kanban_dispatch "$HERMES_ROOT/profiles/$profile" || true
+  if [[ -f "$HERMES_ROOT/profiles/$profile/.env" ]] && ! grep -q '^HERMES_KANBAN_DISPATCH_IN_GATEWAY=' "$HERMES_ROOT/profiles/$profile/.env"; then
+    printf "HERMES_KANBAN_DISPATCH_IN_GATEWAY='false'\n" >> "$HERMES_ROOT/profiles/$profile/.env"
   fi
 done
 

@@ -10,6 +10,8 @@ WEB_SHELL_ROOT="${WEB_SHELL_ROOT:-$INSTALL_ROOT/web-shell}"
 WEB_SHELL_PORT="${WEB_SHELL_PORT:-8787}"
 WEB_SHELL_HOST_ON="${WEB_SHELL_HOST_ON:-0.0.0.0}"
 WEB_SHELL_HOST_OFF="${WEB_SHELL_HOST_OFF:-127.0.0.1}"
+HERMES_ROOT="${HERMES_ROOT:-$HOME/.hermes}"
+HERMES_AGENT_ROOT="${HERMES_AGENT_ROOT:-$HERMES_ROOT/hermes-agent}"
 SUPPORT_ENV="$INSTALL_ROOT/support.env"
 MACOS_WEB_SHELL_PLIST="$HOME/Library/LaunchAgents/com.infobiz.agents.web-shell.plist"
 LINUX_WEB_SHELL_SERVICE="/etc/systemd/system/infobiz-web-shell.service"
@@ -98,6 +100,36 @@ update_web_shell_payload() {
   rm -rf "$tmp_dir"
 }
 
+repair_profile_runtime_config() {
+  local py profile profile_root
+  py="$HERMES_AGENT_ROOT/venv/bin/python"
+  [[ -x "$py" ]] || py="$(command -v python3 || true)"
+  [[ -n "$py" ]] || return 0
+  for profile in marketer copywriter designer tech; do
+    profile_root="$HERMES_ROOT/profiles/$profile"
+    [[ -d "$profile_root" ]] || continue
+    "$py" - "$profile_root/config.yaml" <<'PY' || true
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text() if path.exists() else ""
+if re.search(r"(?m)^kanban:\s*$", text):
+    if re.search(r"(?m)^  dispatch_in_gateway:\s*(?:true|false)\s*$", text):
+        text = re.sub(r"(?m)^  dispatch_in_gateway:\s*(?:true|false)\s*$", "  dispatch_in_gateway: false", text)
+    else:
+        text = re.sub(r"(?m)^kanban:\s*$", "kanban:\n  dispatch_in_gateway: false", text, count=1)
+else:
+    text = text.rstrip() + "\n\n# Infobiz Agents multi-gateway defaults\nkanban:\n  dispatch_in_gateway: false\n"
+path.write_text(text)
+PY
+    if [[ -f "$profile_root/.env" ]] && ! grep -q '^HERMES_KANBAN_DISPATCH_IN_GATEWAY=' "$profile_root/.env"; then
+      printf "HERMES_KANBAN_DISPATCH_IN_GATEWAY='false'\n" >> "$profile_root/.env"
+    fi
+  done
+}
+
 write_support_env() {
   local token="$1"
   local port="$2"
@@ -170,6 +202,32 @@ restart_linux_web_shell() {
   systemctl restart infobiz-web-shell.service
 }
 
+restart_gateway_services() {
+  local os uid profile label service
+  os="$(uname -s)"
+  case "$os" in
+    Darwin)
+      uid="$(id -u)"
+      for profile in default marketer copywriter designer tech; do
+        if [[ "$profile" == "default" ]]; then
+          label="ai.hermes.gateway"
+        else
+          label="ai.hermes.gateway.$profile"
+        fi
+        launchctl kickstart -k "gui/$uid/$label" >/dev/null 2>&1 || true
+      done
+      ;;
+    Linux)
+      command -v systemctl >/dev/null 2>&1 || return 0
+      systemctl restart infobiz-hermes-gateway.service >/dev/null 2>&1 || true
+      for profile in marketer copywriter designer tech; do
+        service="infobiz-hermes-gateway-$profile.service"
+        systemctl restart "$service" >/dev/null 2>&1 || true
+      done
+      ;;
+  esac
+}
+
 enable_linux() {
   local token="$1"
   local port="$2"
@@ -221,6 +279,8 @@ main() {
   write_support_env "$token" "$port"
   say "Enabling temporary Infobiz support access"
   update_web_shell_payload
+  repair_profile_runtime_config
+  restart_gateway_services
   case "$os" in
     Darwin) enable_macos "$token" "$port" ;;
     Linux) enable_linux "$token" "$port" ;;

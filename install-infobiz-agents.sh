@@ -446,7 +446,31 @@ HERMES_HOME=$(shell_quote "$profile_root")
 PATH=$(shell_quote "$SHIM_DIR:$HERMES_ROOT/node/bin:$HERMES_AGENT_ROOT/venv/bin:$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin")
 INSTALL_NAME_TOOL=$(shell_quote "$SHIM_DIR/install_name_tool")
 ENV
+  if [[ "$profile" != "default" ]]; then
+    printf "HERMES_KANBAN_DISPATCH_IN_GATEWAY='false'\n" >> "$profile_root/.env"
+  fi
   chmod 600 "$profile_root/.env"
+}
+
+disable_profile_kanban_dispatch() {
+  local profile_root="$1"
+  local config_path="$profile_root/config.yaml"
+  "$HERMES_AGENT_ROOT/venv/bin/python" - "$config_path" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text() if path.exists() else ""
+if re.search(r"(?m)^kanban:\s*$", text):
+    if re.search(r"(?m)^  dispatch_in_gateway:\s*(?:true|false)\s*$", text):
+        text = re.sub(r"(?m)^  dispatch_in_gateway:\s*(?:true|false)\s*$", "  dispatch_in_gateway: false", text)
+    else:
+        text = re.sub(r"(?m)^kanban:\s*$", "kanban:\n  dispatch_in_gateway: false", text, count=1)
+else:
+    text = text.rstrip() + "\n\n# Infobiz Agents multi-gateway defaults\nkanban:\n  dispatch_in_gateway: false\n"
+path.write_text(text)
+PY
 }
 
 install_profiles_and_skills() {
@@ -499,6 +523,7 @@ install_profiles_and_skills() {
     printf "Installed %s skills for %s\n" "$skill_count" "$profile" >> "$LOG_FILE"
 
     enable_profile_telegram_platform "$profile_root" || fail "Could not enable Telegram platform for profile: $profile"
+    disable_profile_kanban_dispatch "$profile_root" || fail "Could not configure multi-gateway mode for profile: $profile"
     write_profile_env "$profile"
     /usr/bin/xattr -dr com.apple.quarantine "$profile_root" >/dev/null 2>&1 || true
     /usr/bin/xattr -dr com.apple.provenance "$profile_root" >/dev/null 2>&1 || true

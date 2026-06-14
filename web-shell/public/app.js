@@ -40,10 +40,8 @@ const state = {
   selectedRunId: null,
   runId: null,
   eventSource: null,
-  assistantBuffer: "",
   approvals: new Map(),
   pendingAttachments: [],
-  recorder: null,
   cardAgentId: null,
   cardEditing: false,
   cardPhotoFile: null,
@@ -782,13 +780,14 @@ function renderTelegramSettings(message = "") {
         <strong>${escapeHtml(profile.name || profile.profile)}</strong>
         <small>${profile.configured ? `подключен: ${escapeHtml(profile.tokenPreview)}` : "токен не добавлен"}</small>
       </span>
-      <input class="card-input telegram-token-input" data-agent="${escapeHtml(profile.profile)}" type="password" autocomplete="off" spellcheck="false" placeholder="1234567890:AA..." />
+      <input class="card-input telegram-token-input" data-agent="${escapeHtml(profile.profile)}" type="text" autocomplete="off" spellcheck="false" placeholder="1234567890:AA..." />
     </label>
   `).join("");
 }
 
 async function openSettings() {
   els.settingsPanel.hidden = false;
+  els.telegramToggle.hidden = true;
   renderTelegramSettings("Проверяю Telegram…");
   try {
     await loadTelegramSettings();
@@ -816,7 +815,8 @@ async function saveTelegramSettings() {
       method: "POST",
       body: JSON.stringify({ tokens }),
     });
-    state.telegramSettings = data.settings;
+    const fresh = await api("/api/telegram");
+    state.telegramSettings = fresh;
     const results = data.results || [];
     const restarted = results.filter((item) => item.restart?.restarted).length;
     const failed = results.filter((item) => item.restart && !item.restart.restarted);
@@ -2567,9 +2567,12 @@ async function inspectSnapshot(snapshotId) {
 function connectEvents(runId, sender = null) {
   if (state.eventSource) state.eventSource.close();
   const conversationKey = activeConversationKey();
+  const boundAgent = state.active;
+  const boundGroupId = state.activeGroupId;
   state.eventSource = new EventSource(`/api/runs/${runId}/events`);
   let assistantNode = null;
   let typingNode = addTyping();
+  let assistantBuffer = "";
   if (sender) {
     els.activeMeta.textContent = `${sender.name} печатает…`;
     els.activeMeta.classList.add("typing");
@@ -2577,7 +2580,6 @@ function connectEvents(runId, sender = null) {
     setActiveTyping(true);
   }
   closeStatusGroup();
-  state.assistantBuffer = "";
 
   const clearTyping = () => {
     if (typingNode) {
@@ -2593,25 +2595,24 @@ function connectEvents(runId, sender = null) {
     addActivity(event);
     if (activeConversationKey() !== conversationKey) {
       if (event.type === "run.completed" || event.type === "run.failed" || event.type === "run.exited") {
-        loadAgentChats({ refreshMessages: false }).catch(() => {});
         loadRuns().catch(() => {});
       }
       return;
     }
 
     if (event.type === "message.delta") {
-      state.assistantBuffer += event.delta || "";
+      assistantBuffer += event.delta || "";
       if (!assistantNode) {
         clearTyping();
         closeStatusGroup();
         assistantNode = addMessage("assistant", "", "", sender);
       }
-      setMessageText(assistantNode, state.assistantBuffer);
+      setMessageText(assistantNode, assistantBuffer);
     }
 
-    if (event.type === "run.started" && event.sessionId && !state.activeGroupId) {
+    if (event.type === "run.started" && event.sessionId && !boundGroupId) {
       state.activeChatId = event.sessionId;
-      state.activeChatByAgent[state.active] = event.sessionId;
+      state.activeChatByAgent[boundAgent] = event.sessionId;
       renderAgentChats();
     }
 
@@ -2641,15 +2642,15 @@ function connectEvents(runId, sender = null) {
     if (event.type === "run.completed") {
       clearTyping();
       closeStatusGroup();
-      if (!assistantNode || !state.assistantBuffer.trim()) {
+      if (!assistantNode || !assistantBuffer.trim()) {
         renderRichAssistant(event.output || "Готово.", sender);
       } else {
-        renderRichAssistant(state.assistantBuffer, sender, assistantNode);
+        renderRichAssistant(assistantBuffer, sender, assistantNode);
       }
       finishRun("готово");
       loadHealth().catch(() => {});
       loadRuns().catch(() => {});
-      loadAgentChats({ refreshMessages: false }).catch(() => {});
+      if (activeConversationKey() === conversationKey) loadAgentChats({ refreshMessages: false }).catch(() => {});
     }
 
     if (event.type === "run.failed") {
@@ -3040,19 +3041,18 @@ function kindGlyph(kind) {
   if (kind === "video") {
     return '<svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M4 5h11a2 2 0 012 2v2.5l4-2.5v10l-4-2.5V17a2 2 0 01-2 2H4a2 2 0 01-2-2V7a2 2 0 012-2z"/></svg>';
   }
-  if (kind === "audio" || kind === "voice") {
+  if (kind === "audio") {
     return '<svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 3a3 3 0 013 3v6a3 3 0 01-6 0V6a3 3 0 013-3zm7 9a7 7 0 01-6 6.93V22h-2v-3.07A7 7 0 015 12h2a5 5 0 0010 0h2z"/></svg>';
   }
   return '<svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M6 2h8l6 6v12a2 2 0 01-2 2H6a2 2 0 01-2-2V4a2 2 0 012-2zm7 1.5V9h5.5L13 3.5z"/></svg>';
 }
 
-async function uploadFile(file, { voice = false } = {}) {
+async function uploadFile(file) {
   const res = await fetch("/api/uploads", {
     method: "POST",
     headers: {
       "Content-Type": file.type || "application/octet-stream",
-      "x-filename": encodeURIComponent(file.name || (voice ? "voice.webm" : "file")),
-      ...(voice ? { "x-voice": "1" } : {}),
+      "x-filename": encodeURIComponent(file.name || "file"),
     },
     body: file,
   });
@@ -3062,7 +3062,7 @@ async function uploadFile(file, { voice = false } = {}) {
 
 async function uploadPending(items) {
   const out = [];
-  for (const it of items) out.push(await uploadFile(it.file, { voice: it.voice }));
+  for (const it of items) out.push(await uploadFile(it.file));
   return out;
 }
 
@@ -3129,21 +3129,6 @@ function attachmentInnerHTML(att, side) {
   if (kind === "video") {
     return `<video class="media-video" src="${url}" controls preload="metadata"></video>${meta}`;
   }
-  if (kind === "voice" || kind === "audio") {
-    const dur = att.duration ? formatDuration(att.duration) : "0:00";
-    return `
-      <div class="voice" data-duration="${att.duration || 0}">
-        <button type="button" class="voice-play" aria-label="Воспроизвести">
-          <svg class="i-play" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
-          <svg class="i-pause" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>
-        </button>
-        <div class="voice-body">
-          <div class="voice-track"><div class="voice-progress"></div></div>
-          <div class="voice-dur">${dur}</div>
-        </div>
-        <audio src="${url}" preload="metadata"></audio>
-      </div>${meta}`;
-  }
   return `
     <a class="file-card" href="${url}" download="${name}">
       <span class="file-ic">${kindGlyph("file")}</span>
@@ -3172,115 +3157,9 @@ function addAttachment(role, att, sender = null) {
   bubble.innerHTML = inner;
   row.appendChild(bubble);
   els.messages.appendChild(row);
-  wireVoicePlayers(bubble);
   applyGrouping();
   scrollMessages();
   return row;
-}
-
-function wireVoicePlayers(scope) {
-  for (const voice of scope.querySelectorAll(".voice")) {
-    if (voice.dataset.wired) continue;
-    voice.dataset.wired = "1";
-    const audio = voice.querySelector("audio");
-    const btn = voice.querySelector(".voice-play");
-    const progress = voice.querySelector(".voice-progress");
-    const durEl = voice.querySelector(".voice-dur");
-    const track = voice.querySelector(".voice-track");
-    const fallback = Number(voice.dataset.duration) || 0;
-    const totalDur = () => (Number.isFinite(audio.duration) ? audio.duration : fallback);
-    const showDur = () => { durEl.textContent = formatDuration(totalDur()); };
-    audio.addEventListener("loadedmetadata", showDur);
-    audio.addEventListener("durationchange", showDur);
-    btn.addEventListener("click", () => {
-      if (audio.paused) {
-        for (const other of document.querySelectorAll(".voice audio")) if (other !== audio) other.pause();
-        audio.play();
-      } else {
-        audio.pause();
-      }
-    });
-    audio.addEventListener("play", () => voice.classList.add("playing"));
-    audio.addEventListener("pause", () => voice.classList.remove("playing"));
-    audio.addEventListener("ended", () => {
-      voice.classList.remove("playing");
-      progress.style.width = "0%";
-      showDur();
-    });
-    audio.addEventListener("timeupdate", () => {
-      const total = totalDur();
-      if (total) {
-        progress.style.width = `${Math.min(100, (audio.currentTime / total) * 100)}%`;
-        durEl.textContent = formatDuration(total - audio.currentTime);
-      }
-    });
-    track.addEventListener("click", (event) => {
-      const rect = track.getBoundingClientRect();
-      const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
-      const total = totalDur();
-      if (total && Number.isFinite(audio.duration)) audio.currentTime = ratio * total;
-    });
-  }
-}
-
-let recordTimer = null;
-let recordStart = 0;
-let recordChunks = [];
-
-function showRecordBar(on) {
-  els.recordBar.hidden = !on;
-  els.composerRow.hidden = on;
-}
-
-async function startRecording() {
-  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
-    addMessage("assistant", "Браузер не поддерживает запись голоса.", "warning");
-    return;
-  }
-  let stream;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  } catch {
-    addMessage("assistant", "Нет доступа к микрофону.", "warning");
-    return;
-  }
-  recordChunks = [];
-  const rec = new MediaRecorder(stream);
-  state.recorder = { rec, stream, cancelled: false };
-  rec.ondataavailable = (event) => { if (event.data.size) recordChunks.push(event.data); };
-  rec.onstop = async () => {
-    stream.getTracks().forEach((track) => track.stop());
-    clearInterval(recordTimer);
-    showRecordBar(false);
-    const duration = (Date.now() - recordStart) / 1000;
-    const cancelled = state.recorder?.cancelled;
-    state.recorder = null;
-    if (cancelled || !recordChunks.length) return;
-    const blob = new Blob(recordChunks, { type: rec.mimeType || "audio/webm" });
-    const file = new File([blob], "voice.webm", { type: blob.type });
-    els.send.disabled = true;
-    try {
-      const att = await uploadFile(file, { voice: true });
-      att.duration = duration;
-      await startAgentRun("", [att]);
-    } catch (error) {
-      addMessage("assistant", `Не удалось отправить голосовое: ${error.message}`, "error");
-      els.send.disabled = false;
-    }
-  };
-  rec.start();
-  recordStart = Date.now();
-  showRecordBar(true);
-  els.recordTime.textContent = "0:00";
-  recordTimer = setInterval(() => {
-    els.recordTime.textContent = formatDuration((Date.now() - recordStart) / 1000);
-  }, 200);
-}
-
-function stopRecording(send) {
-  if (!state.recorder) return;
-  state.recorder.cancelled = !send;
-  state.recorder.rec.stop();
 }
 
 els.composer.addEventListener("submit", submitPrompt);
@@ -3342,12 +3221,6 @@ els.agentCard.addEventListener("click", (event) => {
 
 els.settingsBtn.addEventListener("click", openSettings);
 els.settingsClose.addEventListener("click", closeSettings);
-els.telegramToggle.addEventListener("click", () => {
-  const inputs = [...els.telegramAgentTokens.querySelectorAll(".telegram-token-input")];
-  const visible = inputs.some((input) => input.type === "text");
-  for (const input of inputs) input.type = visible ? "password" : "text";
-  els.telegramToggle.textContent = visible ? "Показать токены" : "Скрыть токены";
-});
 els.telegramSave.addEventListener("click", saveTelegramSettings);
 els.settingsPanel.addEventListener("click", (event) => {
   if (event.target === els.settingsPanel) closeSettings();

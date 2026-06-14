@@ -2581,6 +2581,28 @@ function supportServiceSummary() {
   return { platform: process.platform, note: "service summary is not implemented for this platform" };
 }
 
+function profileRuntimeFiles(agentId) {
+  const dir = profileDir(agentId);
+  const soul = readText(join(dir, "SOUL.md"), "");
+  const config = readText(join(dir, "config.yaml"), "");
+  const env = readText(join(dir, ".env"), "");
+  const kanbanMatch = config.match(/^kanban:\s*\n(?:  .*\n)*?  dispatch_in_gateway:\s*(true|false)\s*$/m);
+  const modelMatch = config.match(/^\s*(?:default|model):\s*['"]?([^'"\n]+)['"]?\s*$/m);
+  return {
+    profileDir: dir,
+    soulExists: existsSync(join(dir, "SOUL.md")),
+    soulTitle: (soul.match(/^#\s+(.+)$/m)?.[1] || "").slice(0, 180),
+    soulHead: soul.split(/\r?\n/).slice(0, 12).join("\n"),
+    configExists: existsSync(join(dir, "config.yaml")),
+    kanbanDispatchInGateway: kanbanMatch ? kanbanMatch[1] === "true" : null,
+    modelHint: modelMatch ? modelMatch[1].trim() : "",
+    envExists: existsSync(join(dir, ".env")),
+    telegramConfigured: Boolean(readEnvValue(env, "TELEGRAM_BOT_TOKEN")),
+    kanbanEnv: readEnvValue(env, "HERMES_KANBAN_DISPATCH_IN_GATEWAY"),
+    hermesHomeEnv: readEnvValue(env, "HERMES_HOME"),
+  };
+}
+
 function supportBundle() {
   const agents = PROFILE_ORDER
     .filter((id) => existsSync(profileDir(id)))
@@ -2589,6 +2611,7 @@ function supportBundle() {
       name: nameLabel(id),
       diagnostics: supportSection("diagnostics", () => agentDiagnostics(id)),
       telegram: supportSection("telegram", () => telegramSettings(id)),
+      runtimeFiles: supportSection("runtimeFiles", () => profileRuntimeFiles(id)),
       logs: {
         gateway: safeTail(join(profileDir(id), "logs", "gateway.log"), 260),
         gatewayError: safeTail(join(profileDir(id), "logs", "gateway.error.log"), 180),
@@ -3277,8 +3300,7 @@ function readRawBody(req, maxBytes = 200 * 1024 * 1024) {
   });
 }
 
-function kindForMime(mime, voice) {
-  if (voice) return "voice";
+function kindForMime(mime) {
   if (mime.startsWith("image/")) return "image";
   if (mime.startsWith("video/")) return "video";
   if (mime.startsWith("audio/")) return "audio";
@@ -3291,7 +3313,7 @@ function uploadExt(name, mime) {
   return UPLOAD_MIME_EXT[mime] || "";
 }
 
-function saveUpload({ buffer, name, mime, voice }) {
+function saveUpload({ buffer, name, mime }) {
   const ext = uploadExt(name, mime);
   const fileName = `${randomUUID().replaceAll("-", "")}${ext}`;
   writeFileSync(join(UPLOADS_DIR, fileName), buffer);
@@ -3300,7 +3322,7 @@ function saveUpload({ buffer, name, mime, voice }) {
     name: String(name || fileName),
     mime: mime || "application/octet-stream",
     size: buffer.length,
-    kind: kindForMime(mime || "", voice),
+    kind: kindForMime(mime || ""),
   };
 }
 
@@ -3789,13 +3811,12 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/uploads") {
       const mime = String(req.headers["content-type"] || "application/octet-stream").split(";")[0].trim();
       const name = decodeURIComponent(String(req.headers["x-filename"] || "file"));
-      const voice = String(req.headers["x-voice"] || "") === "1";
       const buffer = await readRawBody(req);
       if (!buffer.length) {
         sendJson(res, 400, { error: "empty upload" });
         return;
       }
-      sendJson(res, 200, { attachment: saveUpload({ buffer, name, mime, voice }) });
+      sendJson(res, 200, { attachment: saveUpload({ buffer, name, mime }) });
       return;
     }
 

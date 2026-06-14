@@ -43,6 +43,14 @@ def main() -> int:
     os.environ["HERMES_GATEWAY_SESSION"] = "1"
     os.environ["HERMES_SESSION_KEY"] = session_id
     os.environ.pop("HERMES_YOLO_MODE", None)
+    hermes_home = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
+
+    try:
+        from hermes_cli.env_loader import load_hermes_dotenv
+
+        load_hermes_dotenv(hermes_home=hermes_home)
+    except Exception as exc:
+        emit({"type": "env.load_warning", "profile": args.profile, "hermesHome": str(hermes_home), "error": str(exc)})
 
     try:
         from hermes_cli.config import load_config
