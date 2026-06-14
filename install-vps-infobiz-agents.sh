@@ -258,7 +258,7 @@ install_hermes_from_source() {
   run_logged "Running official Hermes setup" bash -lc "cd '$HERMES_AGENT_ROOT' && HERMES_HOME='$HERMES_ROOT' bash ./setup-hermes.sh"
   [[ -x "$HERMES_AGENT_ROOT/venv/bin/python" ]] || fail "Official Hermes setup did not create Python venv"
   [[ -x "$HERMES_CMD" ]] || fail "Official Hermes setup did not create Hermes command"
-  run_logged "Installing Telegram support" "$HERMES_AGENT_ROOT/venv/bin/python" -m pip install --only-binary=:all: "python-telegram-bot[webhooks]==22.6" "aiohttp==3.13.3" "qrcode==7.4.2"
+  run_logged "Installing Telegram support" "$UV_CMD" pip install --python "$HERMES_AGENT_ROOT/venv/bin/python" --only-binary=:all: "python-telegram-bot[webhooks]==22.6" "aiohttp==3.13.3" "qrcode==7.4.2"
   mkdir -p "$HOME/.local/bin" "$HERMES_ROOT"/{cron,sessions,logs,pairing,hooks,image_cache,audio_cache,memories,skills}
   ln -sf "$HERMES_CMD" "$HOME/.local/bin/hermes"
   [[ -f "$HERMES_ROOT/.env" ]] || cp "$HERMES_AGENT_ROOT/.env" "$HERMES_ROOT/.env" 2>/dev/null || cp "$HERMES_AGENT_ROOT/.env.example" "$HERMES_ROOT/.env" 2>/dev/null || : > "$HERMES_ROOT/.env"

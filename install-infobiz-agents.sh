@@ -48,14 +48,21 @@ HERMES_CMD="$HERMES_AGENT_ROOT/venv/bin/hermes"
 UV_CMD=""
 SHIM_DIR="$INSTALL_ROOT/shims"
 CLEANUP_WORKDIR=""
+FAILURE_SUPPORT_PORT="${FAILURE_SUPPORT_PORT:-8797}"
+FAILURE_SUPPORT_TOKEN=""
+FAILURE_SUPPORT_STARTED=""
 
 say() {
   printf "\n==> %s\n" "$1"
 }
 
 fail() {
+  start_failure_support_server || true
   printf "\nERROR: %s\n" "$1" >&2
   printf "Log file: %s\n" "$LOG_FILE" >&2
+  if [[ -n "$FAILURE_SUPPORT_STARTED" ]]; then
+    printf "Support URL: %s\n" "$FAILURE_SUPPORT_STARTED" >&2
+  fi
   exit 1
 }
 
@@ -112,6 +119,111 @@ run_logged() {
 
 shell_quote() {
   printf "%s" "$1" | /usr/bin/sed "s/'/'\\\\''/g; 1s/^/'/; \$s/\$/'/"
+}
+
+detect_lan_ip() {
+  local ip=""
+  ip="$(/usr/sbin/ipconfig getifaddr en0 2>/dev/null || true)"
+  [[ -n "$ip" ]] || ip="$(/usr/sbin/ipconfig getifaddr en1 2>/dev/null || true)"
+  [[ -n "$ip" ]] || ip="127.0.0.1"
+  printf "%s" "$ip"
+}
+
+random_support_token() {
+  if [[ -x /usr/bin/openssl ]]; then
+    /usr/bin/openssl rand -hex 24
+    return
+  fi
+  /bin/date +%s | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}'
+}
+
+start_failure_support_server() {
+  [[ "${INFOBIZ_SUPPORT_ON_FAIL:-1}" == "1" ]] || return 0
+  [[ -z "$FAILURE_SUPPORT_STARTED" ]] || return 0
+  [[ -f "$LOG_FILE" ]] || return 0
+
+  local node_cmd=""
+  if [[ -x "$HERMES_ROOT/node/bin/node" ]]; then
+    node_cmd="$HERMES_ROOT/node/bin/node"
+  elif command -v node >/dev/null 2>&1; then
+    node_cmd="$(command -v node)"
+  else
+    return 0
+  fi
+
+  local support_dir server_js lan_ip url
+  support_dir="$INSTALL_ROOT/support"
+  /bin/mkdir -p "$support_dir"
+  FAILURE_SUPPORT_TOKEN="$(random_support_token)"
+  server_js="$support_dir/failure-support.mjs"
+
+  cat > "$server_js" <<JS
+import http from "node:http";
+import os from "node:os";
+import { existsSync, readFileSync } from "node:fs";
+
+const token = process.env.SUPPORT_TOKEN;
+const logFile = process.env.LOG_FILE;
+const startedAt = new Date().toISOString();
+
+function tail(text, max = 50000) {
+  text = String(text || "");
+  return text.length > max ? text.slice(text.length - max) : text;
+}
+
+function json(res, status, body) {
+  res.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "access-control-allow-origin": "*",
+  });
+  res.end(JSON.stringify(body, null, 2));
+}
+
+http.createServer((req, res) => {
+  const url = new URL(req.url, "http://127.0.0.1");
+  if (url.searchParams.get("token") !== token) {
+    json(res, 403, { ok: false, error: "bad token" });
+    return;
+  }
+  const log = existsSync(logFile) ? readFileSync(logFile, "utf8") : "";
+  json(res, 200, {
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    startedAt,
+    runtime: {
+      platform: os.platform(),
+      arch: os.arch(),
+      hostname: os.hostname(),
+      user: os.userInfo().username,
+      home: os.homedir(),
+      node: process.version,
+      installRoot: process.env.INSTALL_ROOT,
+      hermesRoot: process.env.HERMES_ROOT,
+      hermesAgentRoot: process.env.HERMES_AGENT_ROOT,
+    },
+    files: {
+      logFile,
+      logExists: existsSync(logFile),
+    },
+    logs: {
+      install: tail(log),
+    },
+  });
+}).listen(Number(process.env.PORT), "0.0.0.0");
+JS
+
+  SUPPORT_TOKEN="$FAILURE_SUPPORT_TOKEN" \
+  LOG_FILE="$LOG_FILE" \
+  INSTALL_ROOT="$INSTALL_ROOT" \
+  HERMES_ROOT="$HERMES_ROOT" \
+  HERMES_AGENT_ROOT="$HERMES_AGENT_ROOT" \
+  PORT="$FAILURE_SUPPORT_PORT" \
+    "$node_cmd" "$server_js" >> "$support_dir/failure-support.out.log" 2>> "$support_dir/failure-support.err.log" &
+
+  lan_ip="$(detect_lan_ip)"
+  url="http://$lan_ip:$FAILURE_SUPPORT_PORT/api/support/bundle?token=$FAILURE_SUPPORT_TOKEN"
+  printf "%s\n" "$url" > "$support_dir/failure-support.url"
+  FAILURE_SUPPORT_STARTED="$url"
 }
 
 download_file() {
@@ -356,7 +468,7 @@ install_hermes_from_source() {
   run_logged "Running official Hermes setup" /bin/bash -lc "cd '$HERMES_AGENT_ROOT' && HERMES_HOME='$HERMES_ROOT' bash ./setup-hermes.sh" || return 1
   [[ -x "$HERMES_AGENT_ROOT/venv/bin/python" ]] || return 1
   [[ -x "$HERMES_CMD" ]] || return 1
-  run_logged "Installing Telegram support" "$HERMES_AGENT_ROOT/venv/bin/python" -m pip install --only-binary=:all: "${TELEGRAM_PACKAGES[@]}" || return 1
+  run_logged "Installing Telegram support" "$UV_CMD" pip install --python "$HERMES_AGENT_ROOT/venv/bin/python" --only-binary=:all: "${TELEGRAM_PACKAGES[@]}" || return 1
 
   /bin/mkdir -p "$HOME/.local/bin" "$HERMES_ROOT"/{cron,sessions,logs,pairing,hooks,image_cache,audio_cache,memories,skills}
   /bin/ln -sf "$HERMES_CMD" "$HOME/.local/bin/hermes"
