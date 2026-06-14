@@ -1,106 +1,69 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${VERSION:-0.1.0}"
-BASE_URL="${BASE_URL:-https://github.com/temaserditov/infobiz-agents-installer/releases/download/v${VERSION}}"
-WEB_SHELL_URL="${WEB_SHELL_URL:-$BASE_URL/agent-web-shell-$VERSION.tar.gz}"
-PROFILE_URL="${PROFILE_URL:-$BASE_URL/infobiz-agent-profile-marketer-$VERSION.tar.gz}"
 INSTALL_ROOT="${INSTALL_ROOT:-$HOME/InfobizAgents}"
 HERMES_ROOT="${HERMES_ROOT:-$HOME/.hermes}"
 HERMES_AGENT_ROOT="$HERMES_ROOT/hermes-agent"
-HERMES_CMD="$HERMES_AGENT_ROOT/venv/bin/hermes"
-WEB_SHELL_ROOT="$INSTALL_ROOT/web-shell"
-TMP_ROOT="${TMPDIR:-/tmp}/infobiz-vps-update.$$"
-AGENT_PROFILE_ALLOW="${AGENT_PROFILE_ALLOW:-default,marketer,copywriter,designer,tech}"
-AGENT_PROFILES="${AGENT_PROFILES:-marketer,copywriter,designer,tech}"
-
-cleanup() {
-  rm -rf "$TMP_ROOT"
-}
-trap cleanup EXIT
+DESIGNER_ROOT="$HERMES_ROOT/profiles/designer"
 
 say() {
   printf "==> %s\n" "$1"
 }
 
-repair_gateway_systemd_services() {
-  local profile service profile_home
-  command -v systemctl >/dev/null 2>&1 || return 0
-  systemctl disable --now infobiz-hermes-gateway-producer.service >/dev/null 2>&1 || true
-  rm -f /etc/systemd/system/infobiz-hermes-gateway-producer.service
-  for profile in default marketer copywriter designer tech; do
-    if [[ "$profile" == "default" ]]; then
-      service="infobiz-hermes-gateway.service"
-      profile_home="$HERMES_ROOT"
-    else
-      [[ -d "$HERMES_ROOT/profiles/$profile" ]] || continue
-      service="infobiz-hermes-gateway-$profile.service"
-      profile_home="$HERMES_ROOT/profiles/$profile"
-    fi
-    cat > "/etc/systemd/system/$service" <<SERVICE
-[Unit]
-Description=Infobiz Hermes Gateway $profile
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=$(id -un)
-WorkingDirectory=$INSTALL_ROOT/workspace
-ExecStart=$HERMES_CMD gateway run
-Restart=always
-RestartSec=5
-Environment=HERMES_HOME=$profile_home
-Environment=PATH=$HERMES_ROOT/node/bin:$HERMES_AGENT_ROOT/venv/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
-
-[Install]
-WantedBy=multi-user.target
-SERVICE
-    systemctl enable "$service" >/dev/null 2>&1 || true
-  done
-  systemctl daemon-reload
+fail() {
+  printf "\nERROR: %s\n" "$1" >&2
+  exit 1
 }
 
-disable_profile_kanban_dispatch() {
-  local profile_root="$1"
-  local config_path="$profile_root/config.yaml"
-  python3 - "$config_path" <<'PY'
+patch_markdown_file() {
+  local file="$1"
+  local title="$2"
+  mkdir -p "$(dirname "$file")"
+  "$HERMES_AGENT_ROOT/venv/bin/python" - "$file" "$title" <<'PY'
 from pathlib import Path
 import re
 import sys
 
 path = Path(sys.argv[1])
-text = path.read_text() if path.exists() else ""
-if re.search(r"(?m)^kanban:\s*$", text):
-    if re.search(r"(?m)^  dispatch_in_gateway:\s*(?:true|false)\s*$", text):
-        text = re.sub(r"(?m)^  dispatch_in_gateway:\s*(?:true|false)\s*$", "  dispatch_in_gateway: false", text)
-    else:
-        text = re.sub(r"(?m)^kanban:\s*$", "kanban:\n  dispatch_in_gateway: false", text, count=1)
+title = sys.argv[2]
+text = path.read_text(encoding="utf-8", errors="ignore") if path.exists() else f"# {title}\n"
+
+start = "<!-- INFOBIZ_GPT_IMAGE_2_HIGH_PATCH_START -->"
+end = "<!-- INFOBIZ_GPT_IMAGE_2_HIGH_PATCH_END -->"
+block = f"""{start}
+
+## Infobiz image generation patch
+
+This section is an installer patch. It has priority for image-generation requests.
+
+- If the user asks to generate/create/make/draw an image, cover, banner, creative, illustration, or visual, generate the actual image.
+- Do not answer with only a prompt unless the user explicitly asks for a prompt or image generation is technically unavailable.
+- Use GPT-Image 2 High through the authorized Hermes/OpenAI-Codex image provider.
+- Do not ask for an API key.
+- Do not use OpenAI API, FAL API, Lao Zhang, or a third-party provider unless the user explicitly asks for that route.
+- Do not create the requested image manually with Python, Pillow, HTML, CSS, canvas, SVG, screenshots, or any local drawing/compositing method.
+- Do not generate a background and then overlay text/elements manually with code.
+- If text, labels, badges, arrows, UI fragments, or other elements must appear in the image, include them in the GPT-Image 2 prompt itself.
+- Local code may only help with file handling: downloading, saving, converting, or sending the generated image. It must not draw, compose, typeset, or decorate the requested image.
+- In Telegram, send the generated result as a native image when possible: image URL or `MEDIA:/absolute/path`.
+
+Correct behavior: generate via `image_generate`, send the image, then add a short caption and 1-3 iteration options.
+
+Fallback only if generation is unavailable: clearly say the image tool is not available and provide a temporary GPT-Image 2 prompt.
+
+{end}"""
+
+pattern = re.compile(re.escape(start) + r".*?" + re.escape(end), re.S)
+if pattern.search(text):
+    text = pattern.sub(block, text)
 else:
-    text = text.rstrip() + "\n\n# Infobiz Agents multi-gateway defaults\nkanban:\n  dispatch_in_gateway: false\n"
-path.write_text(text)
-PY
-}
-
-enable_telegram_platform() {
-  local profile_root="$1"
-  local config_path="$profile_root/config.yaml"
-  "$HERMES_AGENT_ROOT/venv/bin/python" - "$config_path" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-text = path.read_text() if path.exists() else ""
-if "platforms:" in text and "  telegram:" in text and "    enabled: true" in text:
-    raise SystemExit(0)
-text = text.rstrip() + "\n\n# Infobiz Agents messaging defaults\nplatforms:\n  telegram:\n    enabled: true\n"
-path.write_text(text)
+    text = text.rstrip() + "\n\n" + block + "\n"
+path.write_text(text, encoding="utf-8")
 PY
 }
 
 configure_designer_image_generation() {
-  local profile_root="$1"
-  local config_path="$profile_root/config.yaml"
+  local config_path="$DESIGNER_ROOT/config.yaml"
   "$HERMES_AGENT_ROOT/venv/bin/python" - "$config_path" <<'PY'
 from pathlib import Path
 import sys
@@ -144,129 +107,23 @@ path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False))
 PY
 }
 
-if [[ "$(uname -s)" != "Linux" ]]; then
-  echo "This updater supports Linux VPS only." >&2
-  exit 1
-fi
+[[ "$(uname -s)" == "Linux" ]] || fail "This updater supports Linux VPS only."
+[[ -d "$HERMES_AGENT_ROOT" ]] || fail "Hermes is not installed. Run the full installer first."
+[[ -x "$HERMES_AGENT_ROOT/venv/bin/python" ]] || fail "Hermes Python venv is missing. Run the full installer first."
+[[ -d "$DESIGNER_ROOT" ]] || fail "Designer profile is not installed. Run the full installer first."
 
-if [[ ! -d "$WEB_SHELL_ROOT" ]]; then
-  echo "WebShell is not installed at $WEB_SHELL_ROOT. Run the full installer first." >&2
-  exit 1
-fi
+say "Patching designer image generation rules"
+patch_markdown_file "$DESIGNER_ROOT/SOUL.md" "SOUL.md"
+patch_markdown_file "$DESIGNER_ROOT/IMAGE_GENERATION_POLICY.md" "IMAGE_GENERATION_POLICY.md"
+patch_markdown_file "$DESIGNER_ROOT/skills/gpt-image-2-generation-basic/SKILL.md" "gpt-image-2-generation-basic"
 
-mkdir -p "$TMP_ROOT"
+say "Configuring GPT-Image 2 High"
+configure_designer_image_generation
 
-say "Downloading agent profiles update"
-curl -fsSL "$PROFILE_URL" -o "$TMP_ROOT/agent-profiles.tar.gz"
-
-say "Extracting agent profiles update"
-mkdir -p "$TMP_ROOT/profiles"
-tar -xzf "$TMP_ROOT/agent-profiles.tar.gz" -C "$TMP_ROOT/profiles"
-
-if [[ ! -d "$TMP_ROOT/profiles/profile/agents" && ! -d "$TMP_ROOT/profiles/profile/skills" ]]; then
-  echo "Invalid agent profiles archive." >&2
-  exit 1
-fi
-
-say "Downloading WebShell update"
-curl -fsSL "$WEB_SHELL_URL" -o "$TMP_ROOT/agent-web-shell.tar.gz"
-
-say "Extracting WebShell update"
-tar -xzf "$TMP_ROOT/agent-web-shell.tar.gz" -C "$TMP_ROOT"
-
-if [[ ! -d "$TMP_ROOT/web-shell" ]]; then
-  echo "Invalid WebShell archive." >&2
-  exit 1
-fi
-
-say "Updating WebShell files"
-rsync -a --delete \
-  --exclude 'docs.json' \
-  --exclude 'groups.json' \
-  --exclude 'runs/' \
-  --exclude 'preflights/' \
-  --exclude 'snapshots/' \
-  --exclude 'uploads/' \
-  --exclude 'approvals/' \
-  "$TMP_ROOT/web-shell/" "$WEB_SHELL_ROOT/"
-
-say "Updating agent profiles"
-IFS=',' read -r -a profiles <<< "$AGENT_PROFILES"
-for profile in "${profiles[@]}"; do
-  profile="$(echo "$profile" | xargs)"
-  [[ -n "$profile" ]] || continue
-  mkdir -p "$HERMES_ROOT/profiles/$profile"
-  if [[ -d "$TMP_ROOT/profiles/profile/agents/$profile" ]]; then
-    rsync -a \
-      --exclude '.env' \
-      --exclude 'config.yaml' \
-      --exclude 'sessions/' \
-      --exclude 'logs/' \
-      --exclude 'memories/' \
-      --exclude 'cron/' \
-      --exclude 'gateway.pid' \
-      "$TMP_ROOT/profiles/profile/agents/$profile/" "$HERMES_ROOT/profiles/$profile/"
-  elif [[ -d "$TMP_ROOT/profiles/profile/skills" ]]; then
-    mkdir -p "$HERMES_ROOT/profiles/$profile/skills"
-    rsync -a "$TMP_ROOT/profiles/profile/skills/" "$HERMES_ROOT/profiles/$profile/skills/"
-  fi
-  enable_telegram_platform "$HERMES_ROOT/profiles/$profile" || true
-  disable_profile_kanban_dispatch "$HERMES_ROOT/profiles/$profile" || true
-  if [[ "$profile" == "designer" ]]; then
-    configure_designer_image_generation "$HERMES_ROOT/profiles/$profile" || true
-  fi
-  if [[ -f "$HERMES_ROOT/profiles/$profile/.env" ]] && ! grep -q '^HERMES_KANBAN_DISPATCH_IN_GATEWAY=' "$HERMES_ROOT/profiles/$profile/.env"; then
-    printf "HERMES_KANBAN_DISPATCH_IN_GATEWAY='false'\n" >> "$HERMES_ROOT/profiles/$profile/.env"
-  fi
-done
-
-if [[ -d "$TMP_ROOT/profiles/profile/default" ]]; then
-  rsync -a \
-    --exclude '.env' \
-    --exclude 'config.yaml' \
-    --exclude 'sessions/' \
-    --exclude 'logs/' \
-    --exclude 'memories/' \
-    --exclude 'profiles/' \
-    --exclude 'hermes-agent/' \
-    --exclude 'node/' \
-    "$TMP_ROOT/profiles/profile/default/" "$HERMES_ROOT/"
-fi
-
-if [[ -d "$TMP_ROOT/profiles/profile/skills/webshell-docs" ]]; then
-  mkdir -p "$HERMES_ROOT/skills"
-  rm -rf "$HERMES_ROOT/skills/webshell-docs"
-  rsync -a "$TMP_ROOT/profiles/profile/skills/webshell-docs" "$HERMES_ROOT/skills/"
-fi
-
+say "Restarting designer gateway"
 if command -v systemctl >/dev/null 2>&1; then
-  systemctl disable --now infobiz-hermes-gateway-producer.service >/dev/null 2>&1 || true
-  rm -f /etc/systemd/system/infobiz-hermes-gateway-producer.service
-  if [[ -f /etc/systemd/system/infobiz-web-shell.service ]]; then
-    sed -i "s/^Environment=AGENT_PROFILE_ALLOW=.*/Environment=AGENT_PROFILE_ALLOW=$AGENT_PROFILE_ALLOW/" /etc/systemd/system/infobiz-web-shell.service
-    systemctl daemon-reload
-  fi
-fi
-
-say "Repairing gateway services"
-repair_gateway_systemd_services
-
-if [[ -f "$INSTALL_ROOT/vps.env" ]]; then
-  if grep -q '^AGENT_PROFILE_ALLOW=' "$INSTALL_ROOT/vps.env"; then
-    sed -i "s/^AGENT_PROFILE_ALLOW=.*/AGENT_PROFILE_ALLOW='$AGENT_PROFILE_ALLOW'/" "$INSTALL_ROOT/vps.env"
-  else
-    printf "AGENT_PROFILE_ALLOW='%s'\n" "$AGENT_PROFILE_ALLOW" >> "$INSTALL_ROOT/vps.env"
-  fi
-fi
-
-say "Restarting WebShell"
-if command -v systemctl >/dev/null 2>&1; then
-  systemctl restart infobiz-web-shell.service
-  systemctl restart infobiz-hermes-gateway.service >/dev/null 2>&1 || true
-  systemctl restart infobiz-hermes-gateway-marketer.service >/dev/null 2>&1 || true
-  systemctl restart infobiz-hermes-gateway-copywriter.service >/dev/null 2>&1 || true
   systemctl restart infobiz-hermes-gateway-designer.service >/dev/null 2>&1 || true
-  systemctl restart infobiz-hermes-gateway-tech.service >/dev/null 2>&1 || true
+  systemctl restart infobiz-web-shell.service >/dev/null 2>&1 || true
 fi
 
-say "Update complete"
+say "Patch complete"

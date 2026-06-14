@@ -4,19 +4,11 @@ setopt NULL_GLOB
 
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin:$HOME/.local/bin:$HOME/.cargo/bin"
 
-VERSION="${VERSION:-0.1.0}"
-BASE_URL="${BASE_URL:-https://github.com/temaserditov/infobiz-agents-installer/releases/download/v${VERSION}}"
-PROFILE_URL="${PROFILE_URL:-$BASE_URL/infobiz-agent-profile-marketer-$VERSION.tar.gz}"
-WEB_SHELL_URL="${WEB_SHELL_URL:-$BASE_URL/agent-web-shell-$VERSION.tar.gz}"
-AGENT_PROFILES="${AGENT_PROFILES:-marketer,copywriter,designer,tech}"
-AGENT_PROFILE_ALLOW="${AGENT_PROFILE_ALLOW:-default,$AGENT_PROFILES}"
-
 INSTALL_ROOT="${INSTALL_ROOT:-$HOME/InfobizAgents}"
 HERMES_ROOT="${HERMES_ROOT:-$HOME/.hermes}"
 HERMES_AGENT_ROOT="$HERMES_ROOT/hermes-agent"
-WEB_SHELL_ROOT="$INSTALL_ROOT/web-shell"
+DESIGNER_ROOT="$HERMES_ROOT/profiles/designer"
 LOG_FILE="$INSTALL_ROOT/update.log"
-TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/infobiz-update.XXXXXX")"
 
 say() {
   printf "==> %s\n" "$1"
@@ -28,70 +20,55 @@ fail() {
   exit 1
 }
 
-cleanup() {
-  /bin/rm -rf "$TMP_ROOT"
-}
-trap cleanup EXIT
-
-download_file() {
-  local url="$1"
-  local output="$2"
-  /usr/bin/curl -fsSL "$url" -o "$output"
-}
-
-replace_student_paths() {
-  local root="$1"
-  [[ -d "$root" ]] || return 0
-  find "$root" -type f \( \
-    -name '*.yaml' -o -name '*.yml' -o -name '*.md' -o -name '*.txt' -o \
-    -name '*.json' -o -name '*.py' -o -name '*.sh' \
-  \) -print0 | while IFS= read -r -d '' file; do
-    /usr/bin/perl -0pi \
-      -e 'BEGIN { $home = $ENV{"HOME"} } s#/Users/serditov#$home#g; s#/Users/nata#$home#g; s#/Users/romanpanfilov#$home#g' \
-      "$file"
-  done
-}
-
-disable_profile_kanban_dispatch() {
-  local profile_root="$1"
-  local config_path="$profile_root/config.yaml"
-  "$HERMES_AGENT_ROOT/venv/bin/python" - "$config_path" <<'PY'
+patch_markdown_file() {
+  local file="$1"
+  local title="$2"
+  /bin/mkdir -p "$(/usr/bin/dirname "$file")"
+  "$HERMES_AGENT_ROOT/venv/bin/python" - "$file" "$title" <<'PY'
 from pathlib import Path
 import re
 import sys
 
 path = Path(sys.argv[1])
-text = path.read_text() if path.exists() else ""
-if re.search(r"(?m)^kanban:\s*$", text):
-    if re.search(r"(?m)^  dispatch_in_gateway:\s*(?:true|false)\s*$", text):
-        text = re.sub(r"(?m)^  dispatch_in_gateway:\s*(?:true|false)\s*$", "  dispatch_in_gateway: false", text)
-    else:
-        text = re.sub(r"(?m)^kanban:\s*$", "kanban:\n  dispatch_in_gateway: false", text, count=1)
+title = sys.argv[2]
+text = path.read_text(encoding="utf-8", errors="ignore") if path.exists() else f"# {title}\n"
+
+start = "<!-- INFOBIZ_GPT_IMAGE_2_HIGH_PATCH_START -->"
+end = "<!-- INFOBIZ_GPT_IMAGE_2_HIGH_PATCH_END -->"
+block = f"""{start}
+
+## Infobiz image generation patch
+
+This section is an installer patch. It has priority for image-generation requests.
+
+- If the user asks to generate/create/make/draw an image, cover, banner, creative, illustration, or visual, generate the actual image.
+- Do not answer with only a prompt unless the user explicitly asks for a prompt or image generation is technically unavailable.
+- Use GPT-Image 2 High through the authorized Hermes/OpenAI-Codex image provider.
+- Do not ask for an API key.
+- Do not use OpenAI API, FAL API, Lao Zhang, or a third-party provider unless the user explicitly asks for that route.
+- Do not create the requested image manually with Python, Pillow, HTML, CSS, canvas, SVG, screenshots, or any local drawing/compositing method.
+- Do not generate a background and then overlay text/elements manually with code.
+- If text, labels, badges, arrows, UI fragments, or other elements must appear in the image, include them in the GPT-Image 2 prompt itself.
+- Local code may only help with file handling: downloading, saving, converting, or sending the generated image. It must not draw, compose, typeset, or decorate the requested image.
+- In Telegram, send the generated result as a native image when possible: image URL or `MEDIA:/absolute/path`.
+
+Correct behavior: generate via `image_generate`, send the image, then add a short caption and 1-3 iteration options.
+
+Fallback only if generation is unavailable: clearly say the image tool is not available and provide a temporary GPT-Image 2 prompt.
+
+{end}"""
+
+pattern = re.compile(re.escape(start) + r".*?" + re.escape(end), re.S)
+if pattern.search(text):
+    text = pattern.sub(block, text)
 else:
-    text = text.rstrip() + "\n\n# Infobiz Agents multi-gateway defaults\nkanban:\n  dispatch_in_gateway: false\n"
-path.write_text(text)
-PY
-}
-
-enable_telegram_platform() {
-  local profile_root="$1"
-  local config_path="$profile_root/config.yaml"
-  "$HERMES_AGENT_ROOT/venv/bin/python" - "$config_path" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-text = path.read_text() if path.exists() else ""
-if "platforms:" in text and "  telegram:" in text and "    enabled: true" in text:
-    raise SystemExit(0)
-text = text.rstrip() + "\n\n# Infobiz Agents messaging defaults\nplatforms:\n  telegram:\n    enabled: true\n"
-path.write_text(text)
+    text = text.rstrip() + "\n\n" + block + "\n"
+path.write_text(text, encoding="utf-8")
 PY
 }
 
 configure_designer_image_generation() {
-  local profile_root="$1"
-  local config_path="$profile_root/config.yaml"
+  local config_path="$DESIGNER_ROOT/config.yaml"
   "$HERMES_AGENT_ROOT/venv/bin/python" - "$config_path" <<'PY'
 from pathlib import Path
 import sys
@@ -150,97 +127,26 @@ restart_launch_agent() {
 [[ "$(/usr/bin/uname -s)" == "Darwin" ]] || fail "This updater supports macOS only."
 [[ -d "$HERMES_AGENT_ROOT" ]] || fail "Hermes is not installed. Run the full installer first."
 [[ -x "$HERMES_AGENT_ROOT/venv/bin/python" ]] || fail "Hermes Python venv is missing. Run the full installer first."
-[[ -d "$WEB_SHELL_ROOT" ]] || fail "WebShell is not installed. Run the full installer first."
+[[ -d "$DESIGNER_ROOT" ]] || fail "Designer profile is not installed. Run the full installer first."
 
 /bin/mkdir -p "$INSTALL_ROOT"
 : > "$LOG_FILE"
-printf "Infobiz Agents update log\nStarted: %s\n" "$(/bin/date)" >> "$LOG_FILE"
+printf "Infobiz Agents patch-only update log\nStarted: %s\n" "$(/bin/date)" >> "$LOG_FILE"
 
-say "Downloading agent update"
-profile_payload="$TMP_ROOT/agent-profiles.tar.gz"
-download_file "$PROFILE_URL" "$profile_payload" >> "$LOG_FILE" 2>&1 || fail "Could not download agent update"
+say "Patching designer image generation rules"
+patch_markdown_file "$DESIGNER_ROOT/SOUL.md" "SOUL.md" >> "$LOG_FILE" 2>&1
+patch_markdown_file "$DESIGNER_ROOT/IMAGE_GENERATION_POLICY.md" "IMAGE_GENERATION_POLICY.md" >> "$LOG_FILE" 2>&1
+patch_markdown_file "$DESIGNER_ROOT/skills/gpt-image-2-generation-basic/SKILL.md" "gpt-image-2-generation-basic" >> "$LOG_FILE" 2>&1
 
-say "Extracting agent update"
-/bin/mkdir -p "$TMP_ROOT/profiles"
-/usr/bin/tar -xzf "$profile_payload" -C "$TMP_ROOT/profiles" >> "$LOG_FILE" 2>&1 || fail "Could not extract agent update"
-[[ -d "$TMP_ROOT/profiles/profile/agents" || -d "$TMP_ROOT/profiles/profile/skills" ]] || fail "Invalid agent update archive"
+say "Configuring GPT-Image 2 High"
+configure_designer_image_generation >> "$LOG_FILE" 2>&1 || fail "Could not configure GPT-Image 2 High for designer"
 
-say "Updating agent files"
-profiles=("${(@s:,:)AGENT_PROFILES}")
-for profile in "${profiles[@]}"; do
-  profile="$(printf "%s" "$profile" | /usr/bin/xargs)"
-  [[ -n "$profile" ]] || continue
-  profile_root="$HERMES_ROOT/profiles/$profile"
-  source_dir="$TMP_ROOT/profiles/profile/agents/$profile"
-  /bin/mkdir -p "$profile_root"
-  if [[ -d "$source_dir" ]]; then
-    /usr/bin/rsync -a \
-      --exclude '.env' \
-      --exclude 'config.yaml' \
-      --exclude 'sessions/' \
-      --exclude 'logs/' \
-      --exclude 'memories/' \
-      --exclude 'cron/' \
-      --exclude 'gateway.pid' \
-      "$source_dir/" "$profile_root/" >> "$LOG_FILE" 2>&1
-  fi
-  if [[ -d "$TMP_ROOT/profiles/profile/skills" ]]; then
-    /bin/mkdir -p "$profile_root/skills"
-    /usr/bin/rsync -a "$TMP_ROOT/profiles/profile/skills/" "$profile_root/skills/" >> "$LOG_FILE" 2>&1
-  fi
-  enable_telegram_platform "$profile_root" >> "$LOG_FILE" 2>&1 || true
-  disable_profile_kanban_dispatch "$profile_root" >> "$LOG_FILE" 2>&1 || true
-  if [[ "$profile" == "designer" ]]; then
-    configure_designer_image_generation "$profile_root" >> "$LOG_FILE" 2>&1 || fail "Could not configure GPT-Image 2 High for designer"
-  fi
-  replace_student_paths "$profile_root"
-done
-
-if [[ -d "$TMP_ROOT/profiles/profile/default" ]]; then
-  /usr/bin/rsync -a \
-    --exclude '.env' \
-    --exclude 'config.yaml' \
-    --exclude 'sessions/' \
-    --exclude 'logs/' \
-    --exclude 'memories/' \
-    --exclude 'profiles/' \
-    --exclude 'hermes-agent/' \
-    --exclude 'node/' \
-    "$TMP_ROOT/profiles/profile/default/" "$HERMES_ROOT/" >> "$LOG_FILE" 2>&1
-fi
-
-if [[ -d "$TMP_ROOT/profiles/profile/skills/webshell-docs" ]]; then
-  /bin/mkdir -p "$HERMES_ROOT/skills"
-  /bin/rm -rf "$HERMES_ROOT/skills/webshell-docs"
-  /usr/bin/ditto "$TMP_ROOT/profiles/profile/skills/webshell-docs" "$HERMES_ROOT/skills/webshell-docs" >> "$LOG_FILE" 2>&1
-fi
-
-say "Updating WebShell files"
-web_payload="$TMP_ROOT/agent-web-shell.tar.gz"
-download_file "$WEB_SHELL_URL" "$web_payload" >> "$LOG_FILE" 2>&1 || fail "Could not download WebShell update"
-/usr/bin/tar -xzf "$web_payload" -C "$TMP_ROOT" >> "$LOG_FILE" 2>&1 || fail "Could not extract WebShell update"
-[[ -d "$TMP_ROOT/web-shell" ]] || fail "Invalid WebShell update archive"
-/usr/bin/rsync -a --delete \
-  --exclude 'docs.json' \
-  --exclude 'groups.json' \
-  --exclude 'runs/' \
-  --exclude 'preflights/' \
-  --exclude 'snapshots/' \
-  --exclude 'uploads/' \
-  --exclude 'approvals/' \
-  "$TMP_ROOT/web-shell/" "$WEB_SHELL_ROOT/" >> "$LOG_FILE" 2>&1
-
-say "Restarting services"
+say "Restarting designer gateway"
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
+restart_launch_agent "ai.hermes.gateway-designer" "$LAUNCH_AGENTS/ai.hermes.gateway-designer.plist"
 restart_launch_agent "com.infobiz.agents.web-shell" "$LAUNCH_AGENTS/com.infobiz.agents.web-shell.plist"
-restart_launch_agent "ai.hermes.gateway" "$LAUNCH_AGENTS/ai.hermes.gateway.plist"
-for profile in "${profiles[@]}"; do
-  profile="$(printf "%s" "$profile" | /usr/bin/xargs)"
-  [[ -n "$profile" ]] || continue
-  restart_launch_agent "ai.hermes.gateway-$profile" "$LAUNCH_AGENTS/ai.hermes.gateway-$profile.plist"
-done
 
-say "Update complete"
+say "Patch complete"
 if [[ -f "$INSTALL_ROOT/web-shell.url" ]]; then
   printf "WebShell: %s\n" "$(/usr/bin/head -n 1 "$INSTALL_ROOT/web-shell.url")"
 fi
