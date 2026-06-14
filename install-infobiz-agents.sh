@@ -326,13 +326,34 @@ install_node_runtime() {
   export PATH="$HERMES_ROOT/node/bin:$PATH"
 }
 
+patch_official_hermes_setup() {
+  local setup_path="$HERMES_AGENT_ROOT/setup-hermes.sh"
+  local tmp_path="$setup_path.infobiz"
+  [[ -f "$setup_path" ]] || return 1
+  /usr/bin/awk -v extras="$HERMES_EXTRAS" '
+    {
+      gsub(/\.\[all\]/, ".[" extras "]");
+      if (index($0, "read -p") && index($0, "Install ripgrep for faster search")) {
+        sub(/read -p.*/, "REPLY=n");
+      }
+      if (index($0, "read -p") && index($0, "Would you like to run the setup wizard now")) {
+        sub(/read -p.*/, "REPLY=n");
+      }
+      print;
+    }
+  ' "$setup_path" > "$tmp_path"
+  /bin/mv "$tmp_path" "$setup_path"
+  /bin/chmod +x "$setup_path"
+}
+
 install_hermes_from_source() {
   local source_tarball="$TMPDIR/hermes-agent-source.tar.gz"
   download_file "$HERMES_SOURCE_URL" "$source_tarball"
   /bin/rm -rf "$HERMES_AGENT_ROOT"
   /bin/mkdir -p "$HERMES_AGENT_ROOT"
   run_logged "Extracting Hermes source" /usr/bin/tar --strip-components=1 -xzf "$source_tarball" -C "$HERMES_AGENT_ROOT" || return 1
-  run_logged "Running official Hermes setup" /bin/bash -lc "cd '$HERMES_AGENT_ROOT' && printf 'n\nn\nn\n' | HERMES_HOME='$HERMES_ROOT' bash ./setup-hermes.sh" || return 1
+  patch_official_hermes_setup || return 1
+  run_logged "Running official Hermes setup" /bin/bash -lc "cd '$HERMES_AGENT_ROOT' && HERMES_HOME='$HERMES_ROOT' bash ./setup-hermes.sh" || return 1
   [[ -x "$HERMES_AGENT_ROOT/venv/bin/python" ]] || return 1
   [[ -x "$HERMES_CMD" ]] || return 1
   run_logged "Installing Telegram support" "$HERMES_AGENT_ROOT/venv/bin/python" -m pip install --only-binary=:all: "${TELEGRAM_PACKAGES[@]}" || return 1
