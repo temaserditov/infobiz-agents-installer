@@ -2052,6 +2052,38 @@ function archiveAgentSessions(agentId, reason = "web-archive") {
   return { ok: true, archive, sessions: join(sessionDir, "sessions.json"), restarted: false };
 }
 
+function archiveTelegramSessions(agentId, reason = "telegram-token") {
+  const dir = profileDir(agentId);
+  if (!existsSync(dir)) throw new Error(`profile not found: ${agentId}`);
+  const sessionDir = join(dir, "sessions");
+  const indexPath = join(sessionDir, "sessions.json");
+  const index = readJson(indexPath, {});
+  const archiveRoot = join(dir, ".archives", `telegram-sessions.${reason}-${new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "")}-${randomUUID().slice(0, 8)}`);
+  const removed = [];
+  const kept = {};
+
+  mkdirSync(sessionDir, { recursive: true });
+  for (const [key, entry] of Object.entries(index || {})) {
+    const platform = String(entry?.platform || entry?.origin?.platform || "").toLowerCase();
+    const sessionId = String(entry?.session_id || key || "");
+    if (platform !== "telegram" || !/^[A-Za-z0-9_-]+$/.test(sessionId)) {
+      kept[key] = entry;
+      continue;
+    }
+    mkdirSync(archiveRoot, { recursive: true });
+    for (const name of [`session_${sessionId}.json`, `${sessionId}.jsonl`]) {
+      const source = join(sessionDir, name);
+      if (existsSync(source)) renameSync(source, join(archiveRoot, name));
+    }
+    removed.push(sessionId);
+  }
+
+  if (removed.length) {
+    writeFileSync(indexPath, `${JSON.stringify(kept, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  }
+  return { ok: true, removed: removed.length, archive: removed.length ? archiveRoot : null };
+}
+
 function envPath(agentId) {
   return join(profileDir(agentId), ".env");
 }
@@ -2121,16 +2153,19 @@ function saveTelegramToken(agentId, token) {
   const path = envPath(agentId);
   let text = readText(path, "");
   if (!text) text = "";
+  const beforeToken = readEnvValue(text, "TELEGRAM_BOT_TOKEN");
   text = writeEnvValue(text, "TELEGRAM_BOT_TOKEN", token);
+  text = writeEnvValue(text, "INFOBIZ_AGENT_IDENTITY_REV", "20260614-telegram-identity");
   writeFileSync(path, text, { encoding: "utf8", mode: 0o600 });
   ensureTelegramPlatformEnabled(agentId);
+  const sessions = beforeToken !== token ? archiveTelegramSessions(agentId) : { ok: true, removed: 0, archive: null };
   let restart = { ok: false, restarted: false };
   try {
     restart = restartAgentGateway(agentId);
   } catch (error) {
     restart = { ok: false, restarted: false, error: error.message || String(error) };
   }
-  return { ok: true, settings: telegramSettings(agentId), restart };
+  return { ok: true, settings: telegramSettings(agentId), restart, sessions };
 }
 
 function saveTelegramTokens(tokens) {
@@ -2151,6 +2186,7 @@ function saveTelegramTokens(tokens) {
       changed: saved.settings.tokenPreview !== before,
       settings: saved.settings,
       restart: saved.restart,
+      sessions: saved.sessions,
     });
   }
   return { ok: true, settings: telegramSettingsAll(), results };
