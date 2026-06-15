@@ -2790,6 +2790,7 @@ function routeSummary() {
     { method: "GET", path: "/api/agents/:id/chats", group: "agent", description: "последние реальные Hermes-сессии профиля" },
     { method: "GET", path: "/api/agents/:id/chats/:sessionId/messages", group: "agent", description: "сообщения реальной Hermes-сессии" },
     { method: "GET", path: "/api/agents/:id/logs", group: "agent", description: "tail gateway.log профиля" },
+    { method: "POST", path: "/api/agents/:id/restart-gateway", group: "agent", description: "перезапускает gateway профиля" },
     { method: "GET", path: "/api/agents/:id/telegram", group: "agent", description: "статус Telegram Bot Token без раскрытия токена" },
     { method: "POST", path: "/api/agents/:id/telegram", group: "agent", description: "сохраняет Telegram Bot Token и перезапускает gateway" },
     { method: "GET", path: "/api/models", group: "settings", description: "доступные варианты модели и текущая модель по профилям" },
@@ -2807,8 +2808,12 @@ function routeSummary() {
 }
 
 function healthSummary() {
+  const agents = listAgents()
+    .map((agent) => supportSection(agent.id, () => agentDiagnostics(agent.id)))
+    .filter((section) => section.ok)
+    .map((section) => section.value);
   return {
-    agents: PROFILE_ORDER.map((id) => agentDiagnostics(id)),
+    agents,
     forbiddenProcesses: forbiddenProcesses(),
     activeRuns: [...runs.values()]
       .filter((run) => ["starting", "running"].includes(run.status))
@@ -3934,6 +3939,18 @@ const server = http.createServer(async (req, res) => {
       const lines = Number(url.searchParams.get("lines") || 220);
       const path = join(profileDir(agentLogsMatch[1]), "logs", "gateway.log");
       sendJson(res, 200, { path, text: tailLines(path, Math.min(Math.max(lines, 20), 1000)) });
+      return;
+    }
+
+    const agentRestartMatch = url.pathname.match(/^\/api\/agents\/([^/]+)\/restart-gateway$/);
+    if (req.method === "POST" && agentRestartMatch) {
+      const id = agentRestartMatch[1];
+      if (!/^[a-z0-9_-]+$/i.test(id)) {
+        sendJson(res, 400, { error: "invalid agent id" });
+        return;
+      }
+      const restart = restartAgentGateway(id);
+      sendJson(res, 200, { ok: restart.ok, restarted: restart.restarted, restart, diagnostics: agentDiagnostics(id) });
       return;
     }
 

@@ -36,6 +36,7 @@ const state = {
   modelSettings: null,
   configDrift: null,
   telegramSettings: null,
+  controlMessage: "",
   routes: null,
   snapshots: [],
   maintenance: null,
@@ -57,7 +58,7 @@ const state = {
   activeGroupId: null,
   currentResponder: null,
   mentionAt: -1,
-  view: "chats",
+  view: "control",
   docs: [],
   activeDocId: null,
   docEditing: false,
@@ -148,6 +149,11 @@ const els = {
   gcMembers: document.querySelector("#gcMembers") || nullEl,
   mentionPopup: document.querySelector("#mentionPopup") || nullEl,
   app: document.querySelector("#app") || nullEl,
+  controlMain: document.querySelector("#controlMain") || nullEl,
+  controlSummary: document.querySelector("#controlSummary") || nullEl,
+  controlAgents: document.querySelector("#controlAgents") || nullEl,
+  restartAllGateways: document.querySelector("#restartAllGateways") || nullEl,
+  downloadDiagnostics: document.querySelector("#downloadDiagnostics") || nullEl,
   brandTitle: document.querySelector("#brandTitle") || nullEl,
   brandSubtitle: document.querySelector("#brandSubtitle") || nullEl,
   newDocBtn: document.querySelector("#newDocBtn") || nullEl,
@@ -777,6 +783,102 @@ async function loadModelSettings() {
   renderModelSettings();
 }
 
+async function loadControlPanel(message = "") {
+  const [agentsResult, healthResult, telegramResult, modelResult] = await Promise.allSettled([
+    api("/api/agents"),
+    api("/api/health"),
+    api("/api/telegram"),
+    api("/api/models"),
+  ]);
+  if (agentsResult.status === "fulfilled") state.agents = agentsResult.value.agents || [];
+  if (healthResult.status === "fulfilled") state.health = healthResult.value;
+  if (telegramResult.status === "fulfilled") state.telegramSettings = telegramResult.value;
+  if (modelResult.status === "fulfilled") state.modelSettings = modelResult.value;
+  const partialFailure = [agentsResult, healthResult, telegramResult, modelResult].some((result) => result.status === "rejected");
+  state.controlMessage = message || (partialFailure ? "Часть данных не загрузилась. Попробуй обновить страницу или скачай диагностику." : "");
+  renderAgents();
+  renderControlPanel();
+}
+
+function controlAgentMeta(agent) {
+  const healthAgent = (state.health?.agents || []).find((item) => item.id === agent.id);
+  const telegram = (state.telegramSettings?.profiles || []).find((item) => item.profile === agent.id);
+  const model = (state.modelSettings?.profiles || []).find((item) => item.profile === agent.id);
+  const issues = healthAgent?.issues || [];
+  return {
+    health: healthAgent?.health || (agent.gateway === "running" ? "ok" : "attention"),
+    issues,
+    sessions: healthAgent?.sessions,
+    logs: healthAgent?.logs,
+    telegram,
+    model,
+  };
+}
+
+function renderControlPanel() {
+  const agents = state.agents || [];
+  const running = agents.filter((agent) => agent.gateway === "running").length;
+  const stale = agents.filter((agent) => agent.gateway === "stale").length;
+  const stopped = agents.filter((agent) => agent.gateway === "stopped").length;
+  const telegramProfiles = state.telegramSettings?.profiles || [];
+  const telegramReady = telegramProfiles.filter((profile) => profile.configured).length;
+  const messageHtml = state.controlMessage
+    ? `<div class="control-message">${escapeHtml(state.controlMessage)}</div>`
+    : "";
+  els.controlSummary.innerHTML = `
+    ${messageHtml}
+    <div class="control-stat ${stopped || stale ? "attention" : "ok"}">
+      <span>Gateway</span>
+      <strong>${running}/${agents.length || 0}</strong>
+      <small>${stale} требуют проверки · ${stopped} offline</small>
+    </div>
+    <div class="control-stat ${telegramReady === telegramProfiles.length && telegramProfiles.length ? "ok" : "attention"}">
+      <span>Telegram</span>
+      <strong>${telegramReady}/${telegramProfiles.length || 0}</strong>
+      <small>токены подключены</small>
+    </div>
+    <div class="control-stat ok">
+      <span>Модель</span>
+      <strong>${escapeHtml((state.modelSettings?.models || []).join(", ") || state.modelSettings?.fallback || "не задано")}</strong>
+      <small>меняется в настройках</small>
+    </div>
+  `;
+  els.controlAgents.innerHTML = agents.map((agent) => {
+    const meta = controlAgentMeta(agent);
+    const telegramText = meta.telegram?.configured ? `Telegram: ${escapeHtml(meta.telegram.tokenPreview)}` : "Telegram: токен не добавлен";
+    const allowedText = meta.telegram?.allowedUsersConfigured ? `ID: ${escapeHtml(meta.telegram.allowedUsers)}` : "ID: не ограничен";
+    const modelText = meta.model?.current || meta.model?.model || state.modelSettings?.fallback || "не задано";
+    const issueText = meta.issues.length ? meta.issues.slice(0, 2).join("; ") : "без критичных проблем";
+    return `
+      <article class="control-agent-card ${meta.health}" data-agent-card="${escapeHtml(agent.id)}">
+        <div class="control-agent-head">
+          <div class="control-agent-title">
+            <span class="gw-dot ${agent.gateway}"></span>
+            <strong>${escapeHtml(agent.name)}</strong>
+          </div>
+          <span class="control-pill ${agent.gateway}">${escapeHtml(gatewayText(agent.gateway))}</span>
+        </div>
+        <div class="control-agent-grid">
+          <div><span>Модель</span><strong>${escapeHtml(modelText)}</strong></div>
+          <div><span>Telegram</span><strong>${telegramText}</strong><small>${allowedText}</small></div>
+          <div><span>Сессии</span><strong>${meta.sessions?.count ?? "?"}</strong><small>${meta.sessions?.maxPromptTokens ?? 0} токенов</small></div>
+          <div><span>Логи</span><strong>${meta.logs?.problemCount ?? 0}</strong><small>свежие предупреждения</small></div>
+        </div>
+        <div class="control-agent-issue">${escapeHtml(issueText)}</div>
+        <div class="control-agent-actions">
+          <button type="button" class="mini-action" data-action="restart-agent" data-agent="${escapeHtml(agent.id)}">Перезапустить</button>
+          <button type="button" class="mini-action" data-action="settings-agent" data-agent="${escapeHtml(agent.id)}">Настройки</button>
+          <button type="button" class="mini-action" data-action="logs-agent" data-agent="${escapeHtml(agent.id)}">Логи</button>
+          <button type="button" class="mini-action" data-action="test-agent" data-agent="${escapeHtml(agent.id)}">Тест</button>
+        </div>
+      </article>
+    `;
+  }).join("");
+  for (const btn of els.controlAgents.querySelectorAll("[data-action]")) {
+    btn.addEventListener("click", () => handleControlAction(btn.dataset.action, btn.dataset.agent));
+  }
+}
+
 function renderModelSettings(message = "") {
   const settings = state.modelSettings;
   const profiles = settings?.profiles || [];
@@ -929,6 +1031,85 @@ async function saveModelSettings() {
     els.modelStatus.textContent = `Не удалось сохранить модель: ${error.message}`;
   } finally {
     els.modelSave.disabled = false;
+  }
+}
+
+async function restartGateway(agentId) {
+  const agent = state.agents.find((item) => item.id === agentId);
+  state.controlMessage = `Перезапускаю ${agent?.name || agentId}…`;
+  renderControlPanel();
+  const result = await api(`/api/agents/${agentId}/restart-gateway`, { method: "POST", body: "{}" });
+  const ok = result.restart?.restarted || result.restarted;
+  await loadControlPanel(ok ? `${agent?.name || agentId}: gateway перезапущен` : `${agent?.name || agentId}: не удалось перезапустить gateway`);
+}
+
+async function restartAllGateways() {
+  els.restartAllGateways.disabled = true;
+  try {
+    const agents = [...(state.agents || [])];
+    state.controlMessage = "Перезапускаю все gateway…";
+    renderControlPanel();
+    const results = [];
+    for (const agent of agents) {
+      try {
+        const result = await api(`/api/agents/${agent.id}/restart-gateway`, { method: "POST", body: "{}" });
+        results.push({ agent, ok: result.restart?.restarted || result.restarted });
+      } catch {
+        results.push({ agent, ok: false });
+      }
+    }
+    const okCount = results.filter((item) => item.ok).length;
+    await loadControlPanel(`Перезапущено: ${okCount} из ${results.length}`);
+  } finally {
+    els.restartAllGateways.disabled = false;
+  }
+}
+
+async function downloadDiagnosticsBundle() {
+  els.downloadDiagnostics.disabled = true;
+  try {
+    const data = await api("/api/export");
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    link.href = url;
+    link.download = `infobiz-diagnostics-${stamp}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    state.controlMessage = "Диагностика скачана.";
+    renderControlPanel();
+  } finally {
+    els.downloadDiagnostics.disabled = false;
+  }
+}
+
+async function handleControlAction(action, agentId) {
+  if (action === "restart-agent") {
+    await restartGateway(agentId).catch((error) => {
+      state.controlMessage = `Не удалось перезапустить ${agentId}: ${error.message}`;
+      renderControlPanel();
+    });
+    return;
+  }
+  if (action === "settings-agent") {
+    state.active = agentId;
+    openSettings();
+    return;
+  }
+  if (action === "logs-agent") {
+    state.active = agentId;
+    await loadDiagnostics().catch(() => {});
+    const logs = await api(`/api/agents/${agentId}/logs?lines=220`).catch((error) => ({ text: error.message }));
+    state.controlMessage = `Логи ${state.agents.find((item) => item.id === agentId)?.name || agentId}: ${String(logs.text || "нет данных").slice(-500)}`;
+    renderControlPanel();
+    return;
+  }
+  if (action === "test-agent") {
+    selectAgent(agentId);
+    setView("chats");
   }
 }
 
@@ -3468,11 +3649,19 @@ els.prompt.addEventListener("keydown", (event) => {
 
 function setView(view) {
   state.view = view;
+  els.app.classList.toggle("mode-control", view === "control");
+  els.app.classList.toggle("mode-chats", view === "chats");
   els.app.classList.toggle("mode-docs", view === "docs");
   els.brandTitle.textContent = view === "docs" ? "Документы" : "Агенты";
   for (const item of document.querySelectorAll(".side-nav-item")) {
     item.classList.toggle("active", item.dataset.view === view);
   }
+  els.newChatBtn.hidden = view !== "chats";
+  els.newDocBtn.hidden = view !== "docs";
+  if (view === "control") loadControlPanel().catch((error) => {
+    state.controlMessage = `Не удалось загрузить панель: ${error.message}`;
+    renderControlPanel();
+  });
   if (view === "docs") loadDocs().catch((error) => addMessage("assistant", `Не удалось загрузить документы: ${error.message}`, "error"));
 }
 
@@ -3491,6 +3680,14 @@ els.docEditToggle.addEventListener("click", () => {
 });
 els.docTitle.addEventListener("input", scheduleDocSave);
 els.docBody.addEventListener("input", scheduleDocSave);
+els.restartAllGateways.addEventListener("click", () => restartAllGateways().catch((error) => {
+  state.controlMessage = `Не удалось перезапустить gateway: ${error.message}`;
+  renderControlPanel();
+}));
+els.downloadDiagnostics.addEventListener("click", () => downloadDiagnosticsBundle().catch((error) => {
+  state.controlMessage = `Не удалось скачать диагностику: ${error.message}`;
+  renderControlPanel();
+}));
 
 async function refreshSidebar() {
   try {
@@ -3560,4 +3757,5 @@ setInterval(refreshSidebar, 8000);
 
 loadGroups()
   .catch(() => {})
-  .finally(() => loadAgents().catch((error) => addMessage("assistant", error.message, "error")));
+  .finally(() => loadAgents().catch((error) => addMessage("assistant", error.message, "error")))
+  .finally(() => setView("control"));

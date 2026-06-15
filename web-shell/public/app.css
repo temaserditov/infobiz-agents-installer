@@ -2344,20 +2344,259 @@ button:disabled {
   min-height: 0;
 }
 
+.control-main {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px;
+  background: var(--bg);
+}
+
+.control-hero {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  align-items: flex-start;
+  max-width: 1180px;
+  margin: 0 auto 18px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.control-kicker {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.control-hero h1 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 28px;
+  line-height: 1.1;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.control-hero p {
+  max-width: 620px;
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.control-hero-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.control-summary,
+.control-agents {
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
+.control-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.control-message {
+  grid-column: 1 / -1;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.control-stat,
+.control-agent-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.control-stat {
+  min-width: 0;
+  padding: 12px;
+}
+
+.control-stat span,
+.control-stat strong,
+.control-stat small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.control-stat span,
+.control-agent-grid span,
+.control-agent-grid small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.control-stat strong {
+  margin-top: 3px;
+  color: var(--ink);
+  font-size: 20px;
+}
+
+.control-stat.ok {
+  border-color: #bfdfce;
+  background: var(--green-soft);
+}
+
+.control-stat.attention {
+  border-color: #efd99d;
+  background: var(--yellow-soft);
+}
+
+.control-agents {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.control-agent-card {
+  min-width: 0;
+  padding: 14px;
+}
+
+.control-agent-card.attention {
+  border-color: #efd99d;
+}
+
+.control-agent-head,
+.control-agent-title,
+.control-agent-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.control-agent-head {
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.control-agent-title {
+  min-width: 0;
+}
+
+.control-agent-title .gw-dot {
+  position: static;
+  flex: none;
+  border-color: var(--surface);
+}
+
+.control-agent-title strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+  font-size: 16px;
+}
+
+.control-pill {
+  flex: none;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.control-pill.running {
+  color: var(--green);
+  background: var(--green-soft);
+}
+
+.control-pill.stale,
+.control-pill.stopped {
+  color: var(--yellow);
+  background: var(--yellow-soft);
+}
+
+.control-agent-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.control-agent-grid div {
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.control-agent-grid strong,
+.control-agent-grid small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.control-agent-grid strong {
+  margin-top: 2px;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.control-agent-issue {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.control-agent-actions {
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
 .chat-shell,
 .docs-main {
   flex: 1;
   min-height: 0;
 }
 
+#app.mode-control .chat-shell,
+#app.mode-control .docs-main,
+#app.mode-control #newChatBtn,
+#app.mode-control #newDocBtn {
+  display: none !important;
+}
+
+#app:not(.mode-control) .control-main {
+  display: none !important;
+}
+
+#app.mode-chats .docs-main,
+#app.mode-chats #newDocBtn {
+  display: none !important;
+}
+
 #app.mode-docs #agents,
 #app.mode-docs .chat-shell,
+#app.mode-docs .control-main,
 #app.mode-docs #newChatBtn {
   display: none !important;
 }
 
 #app:not(.mode-docs) #docsTree,
-#app:not(.mode-docs) .docs-main,
 #app:not(.mode-docs) #newDocBtn {
   display: none !important;
 }

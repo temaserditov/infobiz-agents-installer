@@ -7,7 +7,7 @@
     <link rel="stylesheet" href="/app.css" />
   </head>
   <body>
-    <div id="app">
+    <div id="app" class="mode-control">
       <aside class="agent-sidebar">
         <div class="brand">
           <div>
@@ -29,7 +29,10 @@
         <div id="agents" class="agents"></div>
         <div id="docsTree" class="docs-tree" hidden></div>
         <nav class="side-nav" aria-label="Разделы">
-          <button class="side-nav-item active" data-view="chats" title="Чаты" aria-label="Чаты">
+          <button class="side-nav-item active" data-view="control" title="Управление" aria-label="Управление">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v3H4V5zm0 5h16v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-9zm3 3v2h5v-2H7zm7 0v2h3v-2h-3zm-7 4v2h10v-2H7z"/></svg>
+          </button>
+          <button class="side-nav-item" data-view="chats" title="Тест агента" aria-label="Тест агента">
             <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M4 4h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-5 4v-4H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/></svg>
           </button>
           <button class="side-nav-item" data-view="docs" title="Документы" aria-label="Документы">
@@ -40,6 +43,23 @@
       </aside>
 
       <div class="main-col">
+      <main id="controlMain" class="control-main">
+        <header class="control-hero">
+          <div>
+            <p class="control-kicker">Панель управления</p>
+            <h1>Агенты и Telegram</h1>
+            <p>Здесь можно проверить состояние, перезапустить gateway, привязать токены и скачать диагностику для поддержки.</p>
+          </div>
+          <div class="control-hero-actions">
+            <button id="restartAllGateways" type="button" class="settings-save">Перезапустить все</button>
+            <button id="downloadDiagnostics" type="button" class="mini-action">Скачать диагностику</button>
+          </div>
+        </header>
+
+        <section id="controlSummary" class="control-summary"></section>
+        <section id="controlAgents" class="control-agents"></section>
+      </main>
+
       <main class="chat-shell">
         <header class="topbar">
           <div id="chatHead" class="chat-head" role="button" tabindex="0" title="Профиль агента">
