@@ -4,6 +4,7 @@ set -euo pipefail
 INSTALL_ROOT="${INSTALL_ROOT:-$HOME/InfobizAgents}"
 HERMES_ROOT="${HERMES_ROOT:-$HOME/.hermes}"
 HERMES_AGENT_ROOT="$HERMES_ROOT/hermes-agent"
+MARKETER_ROOT="$HERMES_ROOT/profiles/marketer"
 COPYWRITER_ROOT="$HERMES_ROOT/profiles/copywriter"
 DESIGNER_ROOT="$HERMES_ROOT/profiles/designer"
 TECH_ROOT="$HERMES_ROOT/profiles/tech"
@@ -143,6 +144,43 @@ patch_tech_no_code_defaults() {
   "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" "$TECH_ROOT"
 }
 
+enable_profile_telegram_platform() {
+  local profile_root="$1"
+  local config_path="$profile_root/config.yaml"
+  "$HERMES_AGENT_ROOT/venv/bin/python" - "$config_path" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text() if path.exists() else ""
+if "platforms:" in text and "  telegram:" in text and "    enabled: true" in text:
+    raise SystemExit(0)
+text = text.rstrip() + "\n\n# Infobiz Agents messaging defaults\nplatforms:\n  telegram:\n    enabled: true\n"
+path.write_text(text)
+PY
+}
+
+disable_profile_kanban_dispatch() {
+  local profile_root="$1"
+  local config_path="$profile_root/config.yaml"
+  "$HERMES_AGENT_ROOT/venv/bin/python" - "$config_path" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text() if path.exists() else ""
+if re.search(r"(?m)^kanban:\s*$", text):
+    if re.search(r"(?m)^  dispatch_in_gateway:\s*(?:true|false)\s*$", text):
+        text = re.sub(r"(?m)^  dispatch_in_gateway:\s*(?:true|false)\s*$", "  dispatch_in_gateway: false", text)
+    else:
+        text = re.sub(r"(?m)^kanban:\s*$", "kanban:\n  dispatch_in_gateway: false", text, count=1)
+else:
+    text = text.rstrip() + "\n\n# Infobiz Agents multi-gateway defaults\nkanban:\n  dispatch_in_gateway: false\n"
+path.write_text(text)
+PY
+}
+
 update_web_shell() {
   local workdir payload
   workdir="$(mktemp -d "${TMPDIR:-/tmp}/infobiz-web-shell.XXXXXX")"
@@ -158,21 +196,35 @@ update_web_shell() {
   done
 }
 
-update_copywriter_profile() {
-  local workdir payload source_dir backup_dir item
-  workdir="$(mktemp -d "${TMPDIR:-/tmp}/infobiz-profile.XXXXXX")"
-  payload="$workdir/profile.tar.gz"
-  backup_dir="$HERMES_ROOT/.archives/copywriter-update.$(date +%Y%m%d%H%M%S)"
-  curl -fsSL "$PROFILE_URL" -o "$payload"
-  tar -xzf "$payload" -C "$workdir"
-  source_dir="$workdir/profile/agents/copywriter"
+profile_root_for() {
+  case "$1" in
+    marketer) printf "%s" "$MARKETER_ROOT" ;;
+    copywriter) printf "%s" "$COPYWRITER_ROOT" ;;
+    designer) printf "%s" "$DESIGNER_ROOT" ;;
+    tech) printf "%s" "$TECH_ROOT" ;;
+    *) return 1 ;;
+  esac
+}
+
+backup_profile() {
+  local profile="$1"
+  local profile_root="$2"
+  local backup_dir="$HERMES_ROOT/.archives/$profile-update.$(date +%Y%m%d%H%M%S)"
+  mkdir -p "$backup_dir"
+  if [[ -d "$profile_root" ]]; then
+    cp -a "$profile_root" "$backup_dir/profile"
+  fi
+  printf "Backed up %s to %s\n" "$profile" "$backup_dir"
+}
+
+update_profile_from_payload() {
+  local profile="$1"
+  local source_dir="$2"
+  local profile_root
+  profile_root="$(profile_root_for "$profile")" || return 1
   [[ -d "$source_dir" ]] || return 1
-
-  mkdir -p "$COPYWRITER_ROOT" "$backup_dir"
-  for item in SOUL.md IDENTITY.md AGENTS.md OUTPUT_STANDARDS.md TEST_SCENARIOS.md COMMANDS.md FIRST_RUN.md READY_CHECKLIST.md README.md COPY_BRIEF.md MARKETER_HANDOFF.md DESIGNER_TECH_HANDOFF.md knowledge skills; do
-    [[ -e "$COPYWRITER_ROOT/$item" ]] && cp -a "$COPYWRITER_ROOT/$item" "$backup_dir/" || true
-  done
-
+  mkdir -p "$profile_root"
+  backup_profile "$profile" "$profile_root"
   rsync -a --delete \
     --exclude '.env' \
     --exclude 'auth.json' \
@@ -183,29 +235,45 @@ update_copywriter_profile() {
     --exclude 'cache/' \
     --exclude 'cron/' \
     --exclude 'test-runs/' \
-    "$source_dir/" "$COPYWRITER_ROOT/"
+    "$source_dir/" "$profile_root/"
+  enable_profile_telegram_platform "$profile_root"
+  disable_profile_kanban_dispatch "$profile_root"
+}
+
+update_agent_profiles() {
+  local workdir payload profile source_dir
+  workdir="$(mktemp -d "${TMPDIR:-/tmp}/infobiz-profile.XXXXXX")"
+  payload="$workdir/profile.tar.gz"
+  curl -fsSL "$PROFILE_URL" -o "$payload"
+  tar -xzf "$payload" -C "$workdir"
+  [[ -d "$workdir/profile/agents" ]] || return 1
+  for profile in marketer copywriter designer tech; do
+    source_dir="$workdir/profile/agents/$profile"
+    update_profile_from_payload "$profile" "$source_dir"
+  done
 }
 
 [[ "$(uname -s)" == "Linux" ]] || fail "This updater supports Linux VPS only."
 [[ -d "$HERMES_AGENT_ROOT" ]] || fail "Hermes is not installed. Run the full installer first."
 [[ -x "$HERMES_AGENT_ROOT/venv/bin/python" ]] || fail "Hermes Python venv is missing. Run the full installer first."
+[[ -d "$MARKETER_ROOT" ]] || fail "Marketer profile is not installed. Run the full installer first."
 [[ -d "$COPYWRITER_ROOT" ]] || fail "Copywriter profile is not installed. Run the full installer first."
 [[ -d "$DESIGNER_ROOT" ]] || fail "Designer profile is not installed. Run the full installer first."
 [[ -d "$TECH_ROOT" ]] || fail "Tech profile is not installed. Run the full installer first."
+
+say "Updating agent profiles"
+update_agent_profiles
+
+say "Patching Hermes image reference support"
+patch_hermes_image_reference_support
 
 say "Patching designer image generation rules"
 patch_markdown_file "$DESIGNER_ROOT/SOUL.md" "SOUL.md"
 patch_markdown_file "$DESIGNER_ROOT/IMAGE_GENERATION_POLICY.md" "IMAGE_GENERATION_POLICY.md"
 patch_markdown_file "$DESIGNER_ROOT/skills/gpt-image-2-generation-basic/SKILL.md" "gpt-image-2-generation-basic"
 
-say "Patching Hermes image reference support"
-patch_hermes_image_reference_support
-
 say "Patching tech no-code defaults"
 patch_tech_no_code_defaults
-
-say "Updating copywriter profile"
-update_copywriter_profile
 
 say "Updating WebShell"
 update_web_shell
@@ -213,8 +281,9 @@ update_web_shell
 say "Configuring GPT-Image 2 High"
 configure_designer_image_generation
 
-say "Restarting designer gateway"
+say "Restarting gateways"
 if command -v systemctl >/dev/null 2>&1; then
+  systemctl restart infobiz-hermes-gateway-marketer.service >/dev/null 2>&1 || true
   systemctl restart infobiz-hermes-gateway-copywriter.service >/dev/null 2>&1 || true
   systemctl restart infobiz-hermes-gateway-designer.service >/dev/null 2>&1 || true
   systemctl restart infobiz-hermes-gateway-tech.service >/dev/null 2>&1 || true

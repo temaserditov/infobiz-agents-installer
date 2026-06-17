@@ -7,6 +7,7 @@ export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin:$HOM
 INSTALL_ROOT="${INSTALL_ROOT:-$HOME/InfobizAgents}"
 HERMES_ROOT="${HERMES_ROOT:-$HOME/.hermes}"
 HERMES_AGENT_ROOT="$HERMES_ROOT/hermes-agent"
+MARKETER_ROOT="$HERMES_ROOT/profiles/marketer"
 COPYWRITER_ROOT="$HERMES_ROOT/profiles/copywriter"
 DESIGNER_ROOT="$HERMES_ROOT/profiles/designer"
 TECH_ROOT="$HERMES_ROOT/profiles/tech"
@@ -148,6 +149,43 @@ patch_tech_no_code_defaults() {
   "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" "$TECH_ROOT"
 }
 
+enable_profile_telegram_platform() {
+  local profile_root="$1"
+  local config_path="$profile_root/config.yaml"
+  "$HERMES_AGENT_ROOT/venv/bin/python" - "$config_path" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text() if path.exists() else ""
+if "platforms:" in text and "  telegram:" in text and "    enabled: true" in text:
+    raise SystemExit(0)
+text = text.rstrip() + "\n\n# Infobiz Agents messaging defaults\nplatforms:\n  telegram:\n    enabled: true\n"
+path.write_text(text)
+PY
+}
+
+disable_profile_kanban_dispatch() {
+  local profile_root="$1"
+  local config_path="$profile_root/config.yaml"
+  "$HERMES_AGENT_ROOT/venv/bin/python" - "$config_path" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text() if path.exists() else ""
+if re.search(r"(?m)^kanban:\s*$", text):
+    if re.search(r"(?m)^  dispatch_in_gateway:\s*(?:true|false)\s*$", text):
+        text = re.sub(r"(?m)^  dispatch_in_gateway:\s*(?:true|false)\s*$", "  dispatch_in_gateway: false", text)
+    else:
+        text = re.sub(r"(?m)^kanban:\s*$", "kanban:\n  dispatch_in_gateway: false", text, count=1)
+else:
+    text = text.rstrip() + "\n\n# Infobiz Agents multi-gateway defaults\nkanban:\n  dispatch_in_gateway: false\n"
+path.write_text(text)
+PY
+}
+
 update_web_shell() {
   local workdir payload
   workdir="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/infobiz-web-shell.XXXXXX")"
@@ -164,21 +202,35 @@ update_web_shell() {
   /usr/bin/xattr -dr com.apple.quarantine "$WEB_SHELL_ROOT" >/dev/null 2>&1 || true
 }
 
-update_copywriter_profile() {
-  local workdir payload source_dir backup_dir item
-  workdir="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/infobiz-profile.XXXXXX")"
-  payload="$workdir/profile.tar.gz"
-  backup_dir="$HERMES_ROOT/.archives/copywriter-update.$(/bin/date +%Y%m%d%H%M%S)"
-  /usr/bin/curl -fsSL "$PROFILE_URL" -o "$payload"
-  /usr/bin/tar -xzf "$payload" -C "$workdir"
-  source_dir="$workdir/profile/agents/copywriter"
+profile_root_for() {
+  case "$1" in
+    marketer) printf "%s" "$MARKETER_ROOT" ;;
+    copywriter) printf "%s" "$COPYWRITER_ROOT" ;;
+    designer) printf "%s" "$DESIGNER_ROOT" ;;
+    tech) printf "%s" "$TECH_ROOT" ;;
+    *) return 1 ;;
+  esac
+}
+
+backup_profile() {
+  local profile="$1"
+  local profile_root="$2"
+  local backup_dir="$HERMES_ROOT/.archives/$profile-update.$(/bin/date +%Y%m%d%H%M%S)"
+  /bin/mkdir -p "$backup_dir"
+  if [[ -d "$profile_root" ]]; then
+    /usr/bin/ditto "$profile_root" "$backup_dir/profile"
+  fi
+  printf "Backed up %s to %s\n" "$profile" "$backup_dir" >> "$LOG_FILE"
+}
+
+update_profile_from_payload() {
+  local profile="$1"
+  local source_dir="$2"
+  local profile_root
+  profile_root="$(profile_root_for "$profile")" || return 1
   [[ -d "$source_dir" ]] || return 1
-
-  /bin/mkdir -p "$COPYWRITER_ROOT" "$backup_dir"
-  for item in SOUL.md IDENTITY.md AGENTS.md OUTPUT_STANDARDS.md TEST_SCENARIOS.md COMMANDS.md FIRST_RUN.md READY_CHECKLIST.md README.md COPY_BRIEF.md MARKETER_HANDOFF.md DESIGNER_TECH_HANDOFF.md knowledge skills; do
-    [[ -e "$COPYWRITER_ROOT/$item" ]] && /usr/bin/ditto "$COPYWRITER_ROOT/$item" "$backup_dir/$item" || true
-  done
-
+  /bin/mkdir -p "$profile_root"
+  backup_profile "$profile" "$profile_root"
   /usr/bin/rsync -a --delete \
     --exclude '.env' \
     --exclude 'auth.json' \
@@ -189,8 +241,23 @@ update_copywriter_profile() {
     --exclude 'cache/' \
     --exclude 'cron/' \
     --exclude 'test-runs/' \
-    "$source_dir/" "$COPYWRITER_ROOT/"
-  /usr/bin/xattr -dr com.apple.quarantine "$COPYWRITER_ROOT" >/dev/null 2>&1 || true
+    "$source_dir/" "$profile_root/"
+  enable_profile_telegram_platform "$profile_root"
+  disable_profile_kanban_dispatch "$profile_root"
+  /usr/bin/xattr -dr com.apple.quarantine "$profile_root" >/dev/null 2>&1 || true
+}
+
+update_agent_profiles() {
+  local workdir payload profile source_dir
+  workdir="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/infobiz-profile.XXXXXX")"
+  payload="$workdir/profile.tar.gz"
+  /usr/bin/curl -fsSL "$PROFILE_URL" -o "$payload"
+  /usr/bin/tar -xzf "$payload" -C "$workdir"
+  [[ -d "$workdir/profile/agents" ]] || return 1
+  for profile in marketer copywriter designer tech; do
+    source_dir="$workdir/profile/agents/$profile"
+    update_profile_from_payload "$profile" "$source_dir"
+  done
 }
 
 restart_launch_agent() {
@@ -208,6 +275,7 @@ restart_launch_agent() {
 [[ "$(/usr/bin/uname -s)" == "Darwin" ]] || fail "This updater supports macOS only."
 [[ -d "$HERMES_AGENT_ROOT" ]] || fail "Hermes is not installed. Run the full installer first."
 [[ -x "$HERMES_AGENT_ROOT/venv/bin/python" ]] || fail "Hermes Python venv is missing. Run the full installer first."
+[[ -d "$MARKETER_ROOT" ]] || fail "Marketer profile is not installed. Run the full installer first."
 [[ -d "$COPYWRITER_ROOT" ]] || fail "Copywriter profile is not installed. Run the full installer first."
 [[ -d "$DESIGNER_ROOT" ]] || fail "Designer profile is not installed. Run the full installer first."
 [[ -d "$TECH_ROOT" ]] || fail "Tech profile is not installed. Run the full installer first."
@@ -216,19 +284,19 @@ restart_launch_agent() {
 : > "$LOG_FILE"
 printf "Infobiz Agents patch-only update log\nStarted: %s\n" "$(/bin/date)" >> "$LOG_FILE"
 
+say "Updating agent profiles"
+update_agent_profiles >> "$LOG_FILE" 2>&1 || fail "Could not update agent profiles"
+
+say "Patching Hermes image reference support"
+patch_hermes_image_reference_support >> "$LOG_FILE" 2>&1 || fail "Could not patch Hermes image reference support"
+
 say "Patching designer image generation rules"
 patch_markdown_file "$DESIGNER_ROOT/SOUL.md" "SOUL.md" >> "$LOG_FILE" 2>&1
 patch_markdown_file "$DESIGNER_ROOT/IMAGE_GENERATION_POLICY.md" "IMAGE_GENERATION_POLICY.md" >> "$LOG_FILE" 2>&1
 patch_markdown_file "$DESIGNER_ROOT/skills/gpt-image-2-generation-basic/SKILL.md" "gpt-image-2-generation-basic" >> "$LOG_FILE" 2>&1
 
-say "Patching Hermes image reference support"
-patch_hermes_image_reference_support >> "$LOG_FILE" 2>&1 || fail "Could not patch Hermes image reference support"
-
 say "Patching tech no-code defaults"
 patch_tech_no_code_defaults >> "$LOG_FILE" 2>&1 || fail "Could not patch tech no-code defaults"
-
-say "Updating copywriter profile"
-update_copywriter_profile >> "$LOG_FILE" 2>&1 || fail "Could not update copywriter profile"
 
 say "Updating WebShell"
 update_web_shell >> "$LOG_FILE" 2>&1 || fail "Could not update WebShell"
@@ -236,8 +304,9 @@ update_web_shell >> "$LOG_FILE" 2>&1 || fail "Could not update WebShell"
 say "Configuring GPT-Image 2 High"
 configure_designer_image_generation >> "$LOG_FILE" 2>&1 || fail "Could not configure GPT-Image 2 High for designer"
 
-say "Restarting designer gateway"
+say "Restarting gateways"
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
+restart_launch_agent "ai.hermes.gateway-marketer" "$LAUNCH_AGENTS/ai.hermes.gateway-marketer.plist"
 restart_launch_agent "ai.hermes.gateway-copywriter" "$LAUNCH_AGENTS/ai.hermes.gateway-copywriter.plist"
 restart_launch_agent "ai.hermes.gateway-designer" "$LAUNCH_AGENTS/ai.hermes.gateway-designer.plist"
 restart_launch_agent "ai.hermes.gateway-tech" "$LAUNCH_AGENTS/ai.hermes.gateway-tech.plist"

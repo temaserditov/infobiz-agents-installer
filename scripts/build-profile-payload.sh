@@ -138,11 +138,12 @@ fi
 cat > "$PAYLOAD_DIR/manifest.json" <<JSON
 {
   "version": "$VERSION",
-  "source": "$AGENT_PRODUCT_SOURCE",
+  "source": "agent-product",
   "profiles": ["default", "marketer", "copywriter", "designer", "tech"],
   "generatedAt": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 }
 JSON
 
 tar -C "$BUILD_DIR" -czf "$TARBALL" profile
+/bin/rm -rf "$BUILD_DIR"
 echo "$TARBALL"
