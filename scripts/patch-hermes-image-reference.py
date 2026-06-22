@@ -127,71 +127,79 @@ def _build_input_content(*, prompt: str, reference_image: Any = None) -> List[Di
                 "openai-codex legacy input content",
             )
 
-    text = replace_once(
-        text,
-        '                quality=meta["quality"],\n'
-        '            )\n',
-        '                quality=meta["quality"],\n'
-        '                reference_image=kwargs.get("reference_image") or kwargs.get("source_image") or kwargs.get("input_image"),\n'
-        '            )\n',
-        "openai-codex generate reference arg",
-    )
+    if "reference_image_urls" not in text and "reference_image=reference_image" not in text and 'reference_image=kwargs.get("reference_image")' not in text:
+        text = replace_once(
+            text,
+            '                quality=meta["quality"],\n'
+            '            )\n',
+            '                quality=meta["quality"],\n'
+            '                reference_image=kwargs.get("reference_image") or kwargs.get("source_image") or kwargs.get("input_image"),\n'
+            '            )\n',
+            "openai-codex generate reference arg",
+        )
 
     if "reference_image_urls" in text:
-        text = replace_once(
-            text,
-            '        # Image-to-image / editing is not supported on the Codex OAuth path.\n'
-            '        # Surface a clear, actionable error instead of silently ignoring the\n'
-            '        # source image and producing an unrelated picture.\n'
-            '        if (isinstance(image_url, str) and image_url.strip()) or reference_image_urls:\n'
-            '            return error_response(\n'
-            '                error=(\n'
-            '                    "This model is not capable of image-to-image / editing. "\n'
-            '                    "Please provide a text-only prompt (drop image_url and "\n'
-            '                    "reference_image_urls)."\n'
-            '                ),\n'
-            '                error_type="modality_unsupported",\n'
-            '                provider="openai-codex",\n'
-            '                aspect_ratio=aspect,\n'
-            '            )\n\n',
-            '        reference_image = kwargs.get("reference_image") or kwargs.get("source_image") or kwargs.get("input_image")\n'
-            '        if not reference_image and isinstance(image_url, str) and image_url.strip():\n'
-            '            reference_image = image_url.strip()\n'
-            '        if not reference_image and reference_image_urls:\n'
-            '            try:\n'
-            '                first_ref = reference_image_urls[0]\n'
-            '                if isinstance(first_ref, str) and first_ref.strip():\n'
-            '                    reference_image = first_ref.strip()\n'
-            '            except Exception:\n'
-            '                reference_image = None\n\n',
-            "openai-codex image edit rejection",
-        )
+        if '        reference_image = kwargs.get("reference_image") or kwargs.get("source_image") or kwargs.get("input_image")\n' not in text:
+            text = replace_once(
+                text,
+                '        # Image-to-image / editing is not supported on the Codex OAuth path.\n'
+                '        # Surface a clear, actionable error instead of silently ignoring the\n'
+                '        # source image and producing an unrelated picture.\n'
+                '        if (isinstance(image_url, str) and image_url.strip()) or reference_image_urls:\n'
+                '            return error_response(\n'
+                '                error=(\n'
+                '                    "This model is not capable of image-to-image / editing. "\n'
+                '                    "Please provide a text-only prompt (drop image_url and "\n'
+                '                    "reference_image_urls)."\n'
+                '                ),\n'
+                '                error_type="modality_unsupported",\n'
+                '                provider="openai-codex",\n'
+                '                aspect_ratio=aspect,\n'
+                '            )\n\n',
+                '        reference_image = kwargs.get("reference_image") or kwargs.get("source_image") or kwargs.get("input_image")\n'
+                '        if not reference_image and isinstance(image_url, str) and image_url.strip():\n'
+                '            reference_image = image_url.strip()\n'
+                '        if not reference_image and reference_image_urls:\n'
+                '            try:\n'
+                '                first_ref = reference_image_urls[0]\n'
+                '                if isinstance(first_ref, str) and first_ref.strip():\n'
+                '                    reference_image = first_ref.strip()\n'
+                '            except Exception:\n'
+                '                reference_image = None\n\n',
+                "openai-codex image edit rejection",
+            )
 
-        text = replace_once(
-            text,
-            '                reference_image=kwargs.get("reference_image") or kwargs.get("source_image") or kwargs.get("input_image"),\n',
-            '                reference_image=reference_image,\n',
-            "openai-codex reference image source",
-        )
+        if '                reference_image=reference_image,\n' not in text:
+            text = replace_once(
+                text,
+                '                quality=meta["quality"],\n'
+                '            )\n',
+                '                quality=meta["quality"],\n'
+                '                reference_image=reference_image,\n'
+                '            )\n',
+                "openai-codex reference image source",
+            )
 
-        text = replace_once(
-            text,
-            '                "reference_image": bool(kwargs.get("reference_image") or kwargs.get("source_image") or kwargs.get("input_image")),\n',
-            '                "reference_image": bool(reference_image),\n',
-            "openai-codex reference metadata source",
-        )
+        old_reference_metadata = '                "reference_image": bool(kwargs.get("reference_image") or kwargs.get("source_image") or kwargs.get("input_image")),\n'
+        if old_reference_metadata in text:
+            text = text.replace(
+                old_reference_metadata,
+                '                "reference_image": bool(reference_image),\n',
+                1,
+            )
 
-        text = replace_once(
-            text,
-            '        # The Codex Responses image_generation tool path is text-to-image\n'
-            '        # only here. Image-to-image / editing via Codex OAuth is not wired —\n'
-            '        # users who need editing should use the `openai` (API key), `fal`, or\n'
-            '        # `xai` backends. Declaring text-only keeps the dynamic tool schema\n'
-            "        # honest so the model doesn't attempt an unsupported edit.\n"
-            '        return {"modalities": ["text"], "max_reference_images": 0}\n',
-            '        return {"modalities": ["text", "image"], "max_reference_images": 1}\n',
-            "openai-codex capabilities",
-        )
+        if 'return {"modalities": ["text", "image"], "max_reference_images": 1}' not in text:
+            text = replace_once(
+                text,
+                '        # The Codex Responses image_generation tool path is text-to-image\n'
+                '        # only here. Image-to-image / editing via Codex OAuth is not wired —\n'
+                '        # users who need editing should use the `openai` (API key), `fal`, or\n'
+                '        # `xai` backends. Declaring text-only keeps the dynamic tool schema\n'
+                "        # honest so the model doesn't attempt an unsupported edit.\n"
+                '        return {"modalities": ["text"], "max_reference_images": 0}\n',
+                '        return {"modalities": ["text", "image"], "max_reference_images": 1}\n',
+                "openai-codex capabilities",
+            )
 
     if '"reference_image": bool(reference_image)' not in text and '"reference_image": bool(kwargs.get("reference_image")' not in text:
         text = replace_once(
