@@ -10,8 +10,18 @@ PAYLOAD_DIR="$BUILD_DIR/profile"
 AGENT_PRODUCT_SOURCE="${AGENT_PRODUCT_SOURCE:-$HOME/.hermes-workspaces/marketer/agent-product}"
 TARBALL="$OUT_DIR/infobiz-agent-profile-marketer-$VERSION.tar.gz"
 
-if [[ ! -d "$AGENT_PRODUCT_SOURCE/agents" ]]; then
+if [[ -d "$AGENT_PRODUCT_SOURCE/agents" ]]; then
+  AGENT_SOURCE_ROOT="$AGENT_PRODUCT_SOURCE/agents"
+elif [[ -d "$AGENT_PRODUCT_SOURCE/03_RUNTIME_PROFILES_CLEAN" ]]; then
+  AGENT_SOURCE_ROOT="$AGENT_PRODUCT_SOURCE/03_RUNTIME_PROFILES_CLEAN"
+elif [[ -d "$AGENT_PRODUCT_SOURCE/ai-marketer-for-expert" ]]; then
+  AGENT_SOURCE_ROOT="$AGENT_PRODUCT_SOURCE"
+else
   echo "Missing agent product source: $AGENT_PRODUCT_SOURCE" >&2
+  echo "Expected one of:" >&2
+  echo "  $AGENT_PRODUCT_SOURCE/agents" >&2
+  echo "  $AGENT_PRODUCT_SOURCE/03_RUNTIME_PROFILES_CLEAN" >&2
+  echo "  $AGENT_PRODUCT_SOURCE/ai-marketer-for-expert" >&2
   exit 1
 fi
 
@@ -23,7 +33,7 @@ copy_agent() {
   local target_name="$2"
   local role_name="$3"
   local public_name="$4"
-  local source_dir="$AGENT_PRODUCT_SOURCE/agents/$source_name"
+  local source_dir="$AGENT_SOURCE_ROOT/$source_name"
   local target_dir="$PAYLOAD_DIR/agents/$target_name"
   local soul_tmp
   if [[ ! -d "$source_dir" ]]; then
@@ -34,6 +44,7 @@ copy_agent() {
   /usr/bin/rsync -a \
     --exclude '.DS_Store' \
     --exclude '*.ru.bak' \
+    --exclude 'config.yaml' \
     --exclude '__pycache__/' \
     --exclude '.curator_state' \
     --exclude '.curator_backups' \
