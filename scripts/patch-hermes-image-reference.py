@@ -137,16 +137,73 @@ def _build_input_content(*, prompt: str, reference_image: Any = None) -> List[Di
         "openai-codex generate reference arg",
     )
 
-    text = replace_once(
-        text,
-        '            extra={"size": size, "quality": meta["quality"]},\n',
-        '            extra={\n'
-        '                "size": size,\n'
-        '                "quality": meta["quality"],\n'
-        '                "reference_image": bool(kwargs.get("reference_image") or kwargs.get("source_image") or kwargs.get("input_image")),\n'
-        '            },\n',
-        "openai-codex response metadata",
-    )
+    if "reference_image_urls" in text:
+        text = replace_once(
+            text,
+            '        # Image-to-image / editing is not supported on the Codex OAuth path.\n'
+            '        # Surface a clear, actionable error instead of silently ignoring the\n'
+            '        # source image and producing an unrelated picture.\n'
+            '        if (isinstance(image_url, str) and image_url.strip()) or reference_image_urls:\n'
+            '            return error_response(\n'
+            '                error=(\n'
+            '                    "This model is not capable of image-to-image / editing. "\n'
+            '                    "Please provide a text-only prompt (drop image_url and "\n'
+            '                    "reference_image_urls)."\n'
+            '                ),\n'
+            '                error_type="modality_unsupported",\n'
+            '                provider="openai-codex",\n'
+            '                aspect_ratio=aspect,\n'
+            '            )\n\n',
+            '        reference_image = kwargs.get("reference_image") or kwargs.get("source_image") or kwargs.get("input_image")\n'
+            '        if not reference_image and isinstance(image_url, str) and image_url.strip():\n'
+            '            reference_image = image_url.strip()\n'
+            '        if not reference_image and reference_image_urls:\n'
+            '            try:\n'
+            '                first_ref = reference_image_urls[0]\n'
+            '                if isinstance(first_ref, str) and first_ref.strip():\n'
+            '                    reference_image = first_ref.strip()\n'
+            '            except Exception:\n'
+            '                reference_image = None\n\n',
+            "openai-codex image edit rejection",
+        )
+
+        text = replace_once(
+            text,
+            '                reference_image=kwargs.get("reference_image") or kwargs.get("source_image") or kwargs.get("input_image"),\n',
+            '                reference_image=reference_image,\n',
+            "openai-codex reference image source",
+        )
+
+        text = replace_once(
+            text,
+            '                "reference_image": bool(kwargs.get("reference_image") or kwargs.get("source_image") or kwargs.get("input_image")),\n',
+            '                "reference_image": bool(reference_image),\n',
+            "openai-codex reference metadata source",
+        )
+
+        text = replace_once(
+            text,
+            '        # The Codex Responses image_generation tool path is text-to-image\n'
+            '        # only here. Image-to-image / editing via Codex OAuth is not wired —\n'
+            '        # users who need editing should use the `openai` (API key), `fal`, or\n'
+            '        # `xai` backends. Declaring text-only keeps the dynamic tool schema\n'
+            "        # honest so the model doesn't attempt an unsupported edit.\n"
+            '        return {"modalities": ["text"], "max_reference_images": 0}\n',
+            '        return {"modalities": ["text", "image"], "max_reference_images": 1}\n',
+            "openai-codex capabilities",
+        )
+
+    if '"reference_image": bool(reference_image)' not in text and '"reference_image": bool(kwargs.get("reference_image")' not in text:
+        text = replace_once(
+            text,
+            '            extra={"size": size, "quality": meta["quality"]},\n',
+            '            extra={\n'
+            '                "size": size,\n'
+            '                "quality": meta["quality"],\n'
+            '                "reference_image": bool(kwargs.get("reference_image") or kwargs.get("source_image") or kwargs.get("input_image")),\n'
+            '            },\n',
+            "openai-codex response metadata",
+        )
 
     path.write_text(text, encoding="utf-8")
 
@@ -156,6 +213,77 @@ def patch_image_tool(root: Path) -> None:
     if not path.exists():
         fail(f"image_generation_tool.py not found: {path}")
     text = path.read_text(encoding="utf-8")
+
+    # Newer Hermes already supports image-to-image via image_url and
+    # reference_image_urls. Keep that implementation and only add our
+    # backwards-compatible reference_image alias used by the packaged agents.
+    if (
+        "def image_generate_tool(\n" in text
+        and "reference_image_urls: Optional[list]" in text
+        and "def _dispatch_to_plugin_provider(\n" in text
+        and "image_url: Optional[str] = None" in text
+    ):
+        text = text.replace(
+            "    model_id: str,\n    model_id: str,\n",
+            "    model_id: str,\n",
+            1,
+        )
+
+        if '            "reference_image": {' not in text:
+            text = replace_once(
+                text,
+                '''            "image_url": {
+                "type": "string",
+                "description": (
+                    "Optional source image to edit/transform (image-to-image). "
+                    "When provided, the active backend routes to its image "
+                    "editing endpoint; when omitted, it generates from text "
+                    "alone. Pass a public URL or an absolute local file path "
+                    "from the conversation. Only honored by models that "
+                    "support editing — the description above indicates whether "
+                    "the active model does."
+                ),
+            },
+''',
+                '''            "image_url": {
+                "type": "string",
+                "description": (
+                    "Optional source image to edit/transform (image-to-image). "
+                    "When provided, the active backend routes to its image "
+                    "editing endpoint; when omitted, it generates from text "
+                    "alone. Pass a public URL or an absolute local file path "
+                    "from the conversation. Only honored by models that "
+                    "support editing — the description above indicates whether "
+                    "the active model does."
+                ),
+            },
+            "reference_image": {
+                "type": "string",
+                "description": (
+                    "Alias for image_url. Use this when the user attached an existing image/person "
+                    "and asked to preserve identity, face, pose, style, background, or edit/extend "
+                    "the source image."
+                ),
+            },
+''',
+                "tool schema reference_image alias",
+            )
+
+        if '    reference_image = args.get("reference_image") or args.get("source_image") or args.get("input_image")\n' not in text:
+            text = replace_once(
+                text,
+                '    image_url = args.get("image_url")\n'
+                '    reference_image_urls = args.get("reference_image_urls")\n',
+                '    image_url = args.get("image_url")\n'
+                '    reference_image = args.get("reference_image") or args.get("source_image") or args.get("input_image")\n'
+                '    if not image_url and isinstance(reference_image, str) and reference_image.strip():\n'
+                '        image_url = reference_image.strip()\n'
+                '    reference_image_urls = args.get("reference_image_urls")\n',
+                "handler reference_image alias",
+            )
+
+        path.write_text(text, encoding="utf-8")
+        return
 
     text = replace_once(
         text,
