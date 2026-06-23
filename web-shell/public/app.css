@@ -113,8 +113,9 @@ a {
 
 .agent-sidebar {
   position: relative;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: 66px minmax(0, 1fr);
+  grid-template-rows: 1fr;
   min-height: 0;
   border-right: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.82);
@@ -136,7 +137,7 @@ a {
 }
 
 .brand {
-  display: flex;
+  display: none;
   justify-content: space-between;
   gap: 12px;
   align-items: center;
@@ -205,8 +206,13 @@ a {
 
 .agents {
   display: grid;
+  grid-column: 2;
+  grid-row: 1;
+  align-content: start;
   gap: 6px;
-  padding: 8px 10px 12px;
+  min-width: 0;
+  padding: 12px 10px 12px;
+  border-left: 1px solid var(--line);
   overflow: auto;
 }
 
@@ -428,10 +434,11 @@ a {
 .side-nav {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: center;
+  grid-column: 1;
+  grid-row: 1;
   gap: 8px;
-  order: -1;
-  margin: 12px 0 6px 12px;
+  margin: 12px 0 0;
   padding: 0;
   border-top: 0;
 }
@@ -2683,12 +2690,29 @@ button:disabled {
   min-height: 0;
 }
 
+#app.mode-control {
+  grid-template-columns: 66px minmax(380px, 1fr);
+}
+
+#app.mode-chats {
+  grid-template-columns: var(--sidebar-w, 300px) minmax(380px, 1fr);
+}
+
+#app.mode-control .agent-sidebar {
+  grid-template-columns: 66px;
+}
+
+#app.mode-chats .agent-sidebar {
+  grid-template-columns: 66px minmax(0, 1fr);
+}
+
 #app.mode-control .chat-shell,
 #app.mode-control .docs-main,
 #app.mode-control #newChatBtn,
 #app.mode-control #newDocBtn,
 #app.mode-control #agents,
-#app.mode-control #docsTree {
+#app.mode-control #docsTree,
+#app.mode-control #sidebarResizer {
   display: none !important;
 }
 
