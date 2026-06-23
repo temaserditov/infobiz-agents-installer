@@ -895,7 +895,7 @@ function renderControlPanel() {
         <div class="control-agent-grid">
           <div><span>Модель</span><strong>${escapeHtml(modelText)}</strong></div>
           <div><span>Телеграм-бот</span><strong class="control-status-text ${tokenStatus}">${tokenText}</strong></div>
-          <div><span>Сессии</span><strong>${meta.sessions?.count ?? "?"}</strong><small>${meta.sessions?.maxPromptTokens ?? 0} токенов</small></div>
+          <div><span>Сессии</span><strong>${meta.sessions?.count ?? "?"}</strong></div>
           <div><span>Телеграм ID</span><strong class="control-status-text ${idStatus}">${idText}</strong></div>
         </div>
         <div class="control-agent-issue">${escapeHtml(issueText)}</div>
