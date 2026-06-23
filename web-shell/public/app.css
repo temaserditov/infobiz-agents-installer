@@ -2087,10 +2087,9 @@ button:disabled {
   font-weight: 700;
 }
 
-.modal-field textarea {
+.modal-field textarea,
+.modal-select {
   width: 100%;
-  min-height: 74px;
-  resize: vertical;
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   padding: 10px 12px;
@@ -2100,7 +2099,17 @@ button:disabled {
   font-size: 14px;
 }
 
-.modal-field textarea:focus {
+.modal-field textarea {
+  min-height: 74px;
+  resize: vertical;
+}
+
+.modal-select {
+  min-height: 44px;
+}
+
+.modal-field textarea:focus,
+.modal-select:focus {
   border-color: #40a7e3;
   box-shadow: 0 0 0 3px rgba(64, 167, 227, 0.12);
 }

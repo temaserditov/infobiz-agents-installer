@@ -67,6 +67,9 @@ const state = {
     mode: "",
     agentId: "",
   },
+  modelModal: {
+    agentId: "",
+  },
 };
 
 const avatarSources = {};
@@ -167,6 +170,14 @@ const els = {
   telegramModalFieldLabel: document.querySelector("#telegramModalFieldLabel") || nullEl,
   telegramModalHint: document.querySelector("#telegramModalHint") || nullEl,
   telegramModalError: document.querySelector("#telegramModalError") || nullEl,
+  modelModal: document.querySelector("#modelModal") || nullEl,
+  modelModalTitle: document.querySelector("#modelModalTitle") || nullEl,
+  modelModalClose: document.querySelector("#modelModalClose") || nullEl,
+  modelModalCancel: document.querySelector("#modelModalCancel") || nullEl,
+  modelModalSave: document.querySelector("#modelModalSave") || nullEl,
+  modelModalSelect: document.querySelector("#modelModalSelect") || nullEl,
+  modelModalHint: document.querySelector("#modelModalHint") || nullEl,
+  modelModalError: document.querySelector("#modelModalError") || nullEl,
   brandTitle: document.querySelector("#brandTitle") || nullEl,
   brandSubtitle: document.querySelector("#brandSubtitle") || nullEl,
   newDocBtn: document.querySelector("#newDocBtn") || nullEl,
@@ -890,6 +901,7 @@ function renderControlPanel() {
         <div class="control-agent-issue">${escapeHtml(issueText)}</div>
         <div class="control-agent-actions">
           <button type="button" class="mini-action" data-action="restart-agent" data-agent="${escapeHtml(agent.id)}">Перезапустить</button>
+          <button type="button" class="mini-action" data-action="edit-model" data-agent="${escapeHtml(agent.id)}">Выбрать модель</button>
           <button type="button" class="mini-action" data-action="edit-token" data-agent="${escapeHtml(agent.id)}">${tokenActionText}</button>
           <button type="button" class="mini-action" data-action="edit-id" data-agent="${escapeHtml(agent.id)}">${idActionText}</button>
         </div>
@@ -1173,6 +1185,65 @@ async function saveTelegramModal() {
   }
 }
 
+function modelProfileFor(agentId) {
+  return (state.modelSettings?.profiles || []).find((profile) => profile.profile === agentId) || null;
+}
+
+function openModelModal(agentId) {
+  const agent = state.agents.find((item) => item.id === agentId);
+  const profile = modelProfileFor(agentId);
+  const options = state.modelSettings?.options || [];
+  const current = profile?.current || profile?.model || state.modelSettings?.fallback || options[0] || "";
+  state.modelModal = { agentId };
+  els.modelModalError.hidden = true;
+  els.modelModalError.textContent = "";
+  els.modelModalTitle.textContent = `Модель: ${agent?.name || agentId}`;
+  els.modelModalHint.textContent = profile?.manual
+    ? "Сейчас модель выбрана вручную. После сохранения gateway агента перезапустится автоматически."
+    : "Сейчас модель выбрана установщиком автоматически. Можно вручную выбрать доступную модель.";
+  els.modelModalSelect.innerHTML = options.map((model) => `
+    <option value="${escapeHtml(model)}"${model === current ? " selected" : ""}>${escapeHtml(model)}</option>
+  `).join("");
+  els.modelModal.hidden = false;
+  window.setTimeout(() => els.modelModalSelect.focus(), 0);
+}
+
+function closeModelModal() {
+  els.modelModal.hidden = true;
+  state.modelModal = { agentId: "" };
+}
+
+async function saveModelModal() {
+  const { agentId } = state.modelModal;
+  if (!agentId) return;
+  const model = els.modelModalSelect.value.trim();
+  if (!model) {
+    els.modelModalError.hidden = false;
+    els.modelModalError.textContent = "Выбери модель.";
+    return;
+  }
+  els.modelModalSave.disabled = true;
+  els.modelModalError.hidden = true;
+  try {
+    const data = await api("/api/models", {
+      method: "POST",
+      body: JSON.stringify({ models: { [agentId]: model } }),
+    });
+    const result = (data.results || []).find((item) => item.profile === agentId);
+    const agent = state.agents.find((item) => item.id === agentId);
+    closeModelModal();
+    await loadControlPanel(result?.restart && !result.restart.restarted
+      ? `${agent?.name || agentId}: модель сохранена, но gateway не перезапустился`
+      : `${agent?.name || agentId}: модель обновлена`);
+    await refreshSidebar();
+  } catch (error) {
+    els.modelModalError.hidden = false;
+    els.modelModalError.textContent = error.message || "Не удалось сохранить модель.";
+  } finally {
+    els.modelModalSave.disabled = false;
+  }
+}
+
 async function handleControlAction(action, agentId) {
   if (action === "restart-agent") {
     await restartGateway(agentId).catch((error) => {
@@ -1181,6 +1252,7 @@ async function handleControlAction(action, agentId) {
     });
     return;
   }
+  if (action === "edit-model") openModelModal(agentId);
   if (action === "edit-token") openTelegramModal(agentId, "token");
   if (action === "edit-id") openTelegramModal(agentId, "id");
 }
@@ -3683,7 +3755,8 @@ els.gcDelete.addEventListener("click", deleteGroupCard);
 
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
-  if (!els.telegramModal.hidden) closeTelegramModal();
+  if (!els.modelModal.hidden) closeModelModal();
+  else if (!els.telegramModal.hidden) closeTelegramModal();
   else if (!els.settingsPanel.hidden) closeSettings();
   else if (!els.groupCard.hidden) closeGroupCard();
   else if (!els.createGroup.hidden) closeCreateGroup();
@@ -3769,6 +3842,15 @@ els.telegramModalSave.addEventListener("click", () => saveTelegramModal().catch(
 }));
 els.telegramModal.addEventListener("click", (event) => {
   if (event.target === els.telegramModal) closeTelegramModal();
+});
+els.modelModalClose.addEventListener("click", closeModelModal);
+els.modelModalCancel.addEventListener("click", closeModelModal);
+els.modelModalSave.addEventListener("click", () => saveModelModal().catch((error) => {
+  els.modelModalError.hidden = false;
+  els.modelModalError.textContent = error.message || "Не удалось сохранить модель.";
+}));
+els.modelModal.addEventListener("click", (event) => {
+  if (event.target === els.modelModal) closeModelModal();
 });
 
 async function refreshSidebar() {
