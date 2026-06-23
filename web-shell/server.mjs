@@ -2313,10 +2313,30 @@ function telegramSettingsAll() {
   };
 }
 
+function telegramTokenOwner(token, exceptAgentId = "") {
+  token = String(token || "").trim();
+  if (!token) return null;
+  for (const id of PROFILE_ORDER) {
+    if (id === exceptAgentId || !existsSync(profileDir(id))) continue;
+    const existing = readEnvValue(readText(envPath(id), ""), "TELEGRAM_BOT_TOKEN");
+    if (existing && existing === token) return id;
+  }
+  return null;
+}
+
+function assertTelegramTokenAvailable(agentId, token) {
+  const owner = telegramTokenOwner(token, agentId);
+  if (!owner) return;
+  throw new Error(`Этот Telegram Bot Token уже подключен к агенту «${nameLabel(owner)}». Для каждого агента нужен отдельный бот-токен.`);
+}
+
 function saveTelegramSettings(agentId, { token, allowedUsers, updateToken = true, updateAllowedUsers = true } = {}) {
   token = String(token || "").trim();
   if (updateToken && !/^[0-9]+:[A-Za-z0-9_-]{20,}$/.test(token) && token !== "") {
     throw new Error("invalid Telegram bot token");
+  }
+  if (updateToken && token) {
+    assertTelegramTokenAvailable(agentId, token);
   }
   const normalizedAllowedUsers = updateAllowedUsers ? normalizeTelegramAllowedUsers(allowedUsers) : "";
   const path = envPath(agentId);
@@ -2363,6 +2383,24 @@ function saveTelegramTokens(tokens, allowedUsers = {}) {
   const allowed = new Set(PROFILE_ORDER);
   const results = [];
   const agentIds = new Set([...Object.keys(tokens), ...Object.keys(allowedUsers)]);
+  const requestedTokens = new Map();
+  for (const agentId of agentIds) {
+    if (!allowed.has(agentId)) continue;
+    if (!Object.prototype.hasOwnProperty.call(tokens, agentId)) continue;
+    const token = String(tokens[agentId] || "").trim();
+    if (!token) continue;
+    if (!/^[0-9]+:[A-Za-z0-9_-]{20,}$/.test(token)) {
+      throw new Error(`invalid Telegram bot token for ${nameLabel(agentId)}`);
+    }
+    const existing = requestedTokens.get(token);
+    if (existing) {
+      throw new Error(`Один Telegram Bot Token указан сразу для «${nameLabel(existing)}» и «${nameLabel(agentId)}». Для каждого агента нужен отдельный бот-токен.`);
+    }
+    requestedTokens.set(token, agentId);
+  }
+  for (const [token, agentId] of requestedTokens.entries()) {
+    assertTelegramTokenAvailable(agentId, token);
+  }
   for (const agentId of agentIds) {
     if (!allowed.has(agentId)) continue;
     const hasToken = Object.prototype.hasOwnProperty.call(tokens, agentId);
