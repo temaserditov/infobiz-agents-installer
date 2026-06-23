@@ -427,21 +427,23 @@ a {
 
 .side-nav {
   display: flex;
-  justify-content: center;
-  gap: 16px;
-  margin: auto 12px 16px;
-  padding-top: 14px;
-  border-top: 1px solid var(--line);
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  order: -1;
+  margin: 12px 0 6px 12px;
+  padding: 0;
+  border-top: 0;
 }
 
 .side-nav-item {
   display: grid;
   place-items: center;
-  width: 48px;
-  height: 48px;
+  width: 42px;
+  height: 42px;
   padding: 0;
   border: 1px solid var(--line);
-  border-radius: 50%;
+  border-radius: 8px;
   background: var(--surface);
   cursor: pointer;
 }
@@ -2037,6 +2039,90 @@ button:disabled {
   font-size: 12px;
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(18, 26, 38, 0.36);
+}
+
+.modal-card {
+  width: min(520px, 100%);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 58px;
+  padding: 8px 10px 8px 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.modal-head strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+  font-size: 18px;
+}
+
+.modal-field {
+  display: grid;
+  gap: 7px;
+  padding: 18px 20px 0;
+}
+
+.modal-field span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.modal-field textarea {
+  width: 100%;
+  min-height: 74px;
+  resize: vertical;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 10px 12px;
+  outline: none;
+  color: var(--text);
+  background: var(--surface);
+  font-size: 14px;
+}
+
+.modal-field textarea:focus {
+  border-color: #40a7e3;
+  box-shadow: 0 0 0 3px rgba(64, 167, 227, 0.12);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 16px 20px 20px;
+}
+
+.modal-actions .mini-action,
+.modal-actions .settings-save {
+  width: 136px;
+  min-width: 136px;
+  margin: 0;
+}
+
+.modal-card .settings-status {
+  margin-bottom: 0;
+}
+
 .profile-section {
   padding: 8px 0 18px;
 }
@@ -2402,7 +2488,7 @@ button:disabled {
 
 .control-summary {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 14px;
 }
@@ -2556,6 +2642,14 @@ button:disabled {
   font-size: 13px;
 }
 
+.control-status-text.ok {
+  color: var(--green);
+}
+
+.control-status-text.bad {
+  color: var(--red);
+}
+
 .control-agent-issue {
   margin-top: 10px;
   color: var(--muted);
@@ -2567,6 +2661,13 @@ button:disabled {
   margin-top: 12px;
 }
 
+.control-hero-actions .settings-save,
+.control-hero-actions .mini-action {
+  width: 180px;
+  min-width: 180px;
+  margin: 0;
+}
+
 .chat-shell,
 .docs-main {
   flex: 1;
@@ -2576,7 +2677,9 @@ button:disabled {
 #app.mode-control .chat-shell,
 #app.mode-control .docs-main,
 #app.mode-control #newChatBtn,
-#app.mode-control #newDocBtn {
+#app.mode-control #newDocBtn,
+#app.mode-control #agents,
+#app.mode-control #docsTree {
   display: none !important;
 }
 

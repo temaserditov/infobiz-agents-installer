@@ -63,6 +63,10 @@ const state = {
   activeDocId: null,
   docEditing: false,
   docCollapsed: new Set(),
+  telegramModal: {
+    mode: "",
+    agentId: "",
+  },
 };
 
 const avatarSources = {};
@@ -154,6 +158,15 @@ const els = {
   controlAgents: document.querySelector("#controlAgents") || nullEl,
   restartAllGateways: document.querySelector("#restartAllGateways") || nullEl,
   downloadDiagnostics: document.querySelector("#downloadDiagnostics") || nullEl,
+  telegramModal: document.querySelector("#telegramModal") || nullEl,
+  telegramModalTitle: document.querySelector("#telegramModalTitle") || nullEl,
+  telegramModalClose: document.querySelector("#telegramModalClose") || nullEl,
+  telegramModalCancel: document.querySelector("#telegramModalCancel") || nullEl,
+  telegramModalSave: document.querySelector("#telegramModalSave") || nullEl,
+  telegramModalInput: document.querySelector("#telegramModalInput") || nullEl,
+  telegramModalFieldLabel: document.querySelector("#telegramModalFieldLabel") || nullEl,
+  telegramModalHint: document.querySelector("#telegramModalHint") || nullEl,
+  telegramModalError: document.querySelector("#telegramModalError") || nullEl,
   brandTitle: document.querySelector("#brandTitle") || nullEl,
   brandSubtitle: document.querySelector("#brandSubtitle") || nullEl,
   newDocBtn: document.querySelector("#newDocBtn") || nullEl,
@@ -822,6 +835,7 @@ function renderControlPanel() {
   const stopped = agents.filter((agent) => agent.gateway === "stopped").length;
   const telegramProfiles = state.telegramSettings?.profiles || [];
   const telegramReady = telegramProfiles.filter((profile) => profile.configured).length;
+  const idReady = telegramProfiles.filter((profile) => profile.allowedUsersConfigured).length;
   const messageHtml = state.controlMessage
     ? `<div class="control-message">${escapeHtml(state.controlMessage)}</div>`
     : "";
@@ -837,16 +851,25 @@ function renderControlPanel() {
       <strong>${telegramReady}/${telegramProfiles.length || 0}</strong>
       <small>токены подключены</small>
     </div>
+    <div class="control-stat ${idReady === telegramProfiles.length && telegramProfiles.length ? "ok" : "attention"}">
+      <span>ID</span>
+      <strong>${idReady}/${telegramProfiles.length || 0}</strong>
+      <small>ID назначено</small>
+    </div>
     <div class="control-stat ok">
       <span>Модель</span>
       <strong>${escapeHtml((state.modelSettings?.models || []).join(", ") || state.modelSettings?.fallback || "не задано")}</strong>
-      <small>меняется в настройках</small>
+      <small>текущая конфигурация</small>
     </div>
   `;
   els.controlAgents.innerHTML = agents.map((agent) => {
     const meta = controlAgentMeta(agent);
-    const telegramText = meta.telegram?.configured ? `Telegram: ${escapeHtml(meta.telegram.tokenPreview)}` : "Telegram: токен не добавлен";
-    const allowedText = meta.telegram?.allowedUsersConfigured ? `ID: ${escapeHtml(meta.telegram.allowedUsers)}` : "ID: не ограничен";
+    const tokenText = meta.telegram?.configured ? "Токен добавлен" : "Токен не добавлен";
+    const tokenStatus = meta.telegram?.configured ? "ok" : "bad";
+    const idText = meta.telegram?.allowedUsersConfigured ? "ID привязан" : "ID не привязан";
+    const idStatus = meta.telegram?.allowedUsersConfigured ? "ok" : "bad";
+    const tokenActionText = meta.telegram?.configured ? "Изменить токен" : "Привязать токен";
+    const idActionText = meta.telegram?.allowedUsersConfigured ? "Добавить/изменить ID" : "Привязать ID";
     const modelText = meta.model?.current || meta.model?.model || state.modelSettings?.fallback || "не задано";
     const issueText = meta.issues.length ? meta.issues.slice(0, 2).join("; ") : "без критичных проблем";
     return `
@@ -860,16 +883,15 @@ function renderControlPanel() {
         </div>
         <div class="control-agent-grid">
           <div><span>Модель</span><strong>${escapeHtml(modelText)}</strong></div>
-          <div><span>Telegram</span><strong>${telegramText}</strong><small>${allowedText}</small></div>
+          <div><span>Телеграм-бот</span><strong class="control-status-text ${tokenStatus}">${tokenText}</strong></div>
           <div><span>Сессии</span><strong>${meta.sessions?.count ?? "?"}</strong><small>${meta.sessions?.maxPromptTokens ?? 0} токенов</small></div>
-          <div><span>Логи</span><strong>${meta.logs?.problemCount ?? 0}</strong><small>свежие предупреждения</small></div>
+          <div><span>Телеграм ID</span><strong class="control-status-text ${idStatus}">${idText}</strong></div>
         </div>
         <div class="control-agent-issue">${escapeHtml(issueText)}</div>
         <div class="control-agent-actions">
           <button type="button" class="mini-action" data-action="restart-agent" data-agent="${escapeHtml(agent.id)}">Перезапустить</button>
-          <button type="button" class="mini-action" data-action="settings-agent" data-agent="${escapeHtml(agent.id)}">Настройки</button>
-          <button type="button" class="mini-action" data-action="logs-agent" data-agent="${escapeHtml(agent.id)}">Логи</button>
-          <button type="button" class="mini-action" data-action="test-agent" data-agent="${escapeHtml(agent.id)}">Тест</button>
+          <button type="button" class="mini-action" data-action="edit-token" data-agent="${escapeHtml(agent.id)}">${tokenActionText}</button>
+          <button type="button" class="mini-action" data-action="edit-id" data-agent="${escapeHtml(agent.id)}">${idActionText}</button>
         </div>
       </article>
     `;
@@ -1074,15 +1096,80 @@ async function downloadDiagnosticsBundle() {
     const link = document.createElement("a");
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     link.href = url;
-    link.download = `infobiz-diagnostics-${stamp}.json`;
+    link.download = `infobiz-logs-${stamp}.json`;
     document.body.appendChild(link);
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
-    state.controlMessage = "Диагностика скачана.";
+    state.controlMessage = "Логи скачаны.";
     renderControlPanel();
   } finally {
     els.downloadDiagnostics.disabled = false;
+  }
+}
+
+function telegramProfileFor(agentId) {
+  return (state.telegramSettings?.profiles || []).find((profile) => profile.profile === agentId) || null;
+}
+
+function openTelegramModal(agentId, mode) {
+  const agent = state.agents.find((item) => item.id === agentId);
+  const profile = telegramProfileFor(agentId);
+  state.telegramModal = { agentId, mode };
+  els.telegramModalError.hidden = true;
+  els.telegramModalError.textContent = "";
+  els.telegramModalInput.value = mode === "id" ? (profile?.allowedUsers || "") : "";
+  els.telegramModalInput.rows = mode === "id" ? 5 : 2;
+  els.telegramModalInput.placeholder = mode === "id"
+    ? "123456789, 987654321"
+    : "1234567890:AA...";
+  els.telegramModalTitle.textContent = mode === "id"
+    ? `Telegram ID: ${agent?.name || agentId}`
+    : `Токен бота: ${agent?.name || agentId}`;
+  els.telegramModalFieldLabel.textContent = mode === "id" ? "Telegram ID" : "Bot token";
+  els.telegramModalHint.textContent = mode === "id"
+    ? "Можно добавить несколько ID через запятую или с новой строки. Пустое поле снимет ограничение."
+    : "Вставь токен из BotFather. После сохранения Telegram gateway перезапустится автоматически.";
+  els.telegramModal.hidden = false;
+  window.setTimeout(() => els.telegramModalInput.focus(), 0);
+}
+
+function closeTelegramModal() {
+  els.telegramModal.hidden = true;
+  state.telegramModal = { mode: "", agentId: "" };
+}
+
+async function saveTelegramModal() {
+  const { agentId, mode } = state.telegramModal;
+  if (!agentId || !mode) return;
+  const value = els.telegramModalInput.value.trim();
+  if (mode === "token" && !value) {
+    els.telegramModalError.hidden = false;
+    els.telegramModalError.textContent = "Вставь токен бота.";
+    return;
+  }
+  els.telegramModalSave.disabled = true;
+  els.telegramModalError.hidden = true;
+  try {
+    const body = mode === "id"
+      ? { updateToken: false, updateAllowedUsers: true, allowedUsers: value }
+      : { updateToken: true, updateAllowedUsers: false, token: value };
+    const data = await api(`/api/agents/${agentId}/telegram`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    const restart = data.restart;
+    const agent = state.agents.find((item) => item.id === agentId);
+    closeTelegramModal();
+    await loadControlPanel(restart && !restart.restarted
+      ? `${agent?.name || agentId}: настройки сохранены, но Telegram gateway не перезапустился`
+      : `${agent?.name || agentId}: Telegram обновлен`);
+    await refreshSidebar();
+  } catch (error) {
+    els.telegramModalError.hidden = false;
+    els.telegramModalError.textContent = error.message || "Не удалось сохранить настройки.";
+  } finally {
+    els.telegramModalSave.disabled = false;
   }
 }
 
@@ -1094,23 +1181,8 @@ async function handleControlAction(action, agentId) {
     });
     return;
   }
-  if (action === "settings-agent") {
-    state.active = agentId;
-    openSettings();
-    return;
-  }
-  if (action === "logs-agent") {
-    state.active = agentId;
-    await loadDiagnostics().catch(() => {});
-    const logs = await api(`/api/agents/${agentId}/logs?lines=220`).catch((error) => ({ text: error.message }));
-    state.controlMessage = `Логи ${state.agents.find((item) => item.id === agentId)?.name || agentId}: ${String(logs.text || "нет данных").slice(-500)}`;
-    renderControlPanel();
-    return;
-  }
-  if (action === "test-agent") {
-    selectAgent(agentId);
-    setView("chats");
-  }
+  if (action === "edit-token") openTelegramModal(agentId, "token");
+  if (action === "edit-id") openTelegramModal(agentId, "id");
 }
 
 async function loadResources() {
@@ -3611,7 +3683,8 @@ els.gcDelete.addEventListener("click", deleteGroupCard);
 
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
-  if (!els.settingsPanel.hidden) closeSettings();
+  if (!els.telegramModal.hidden) closeTelegramModal();
+  else if (!els.settingsPanel.hidden) closeSettings();
   else if (!els.groupCard.hidden) closeGroupCard();
   else if (!els.createGroup.hidden) closeCreateGroup();
   else if (!els.agentCard.hidden) closeAgentCard();
@@ -3688,6 +3761,15 @@ els.downloadDiagnostics.addEventListener("click", () => downloadDiagnosticsBundl
   state.controlMessage = `Не удалось скачать диагностику: ${error.message}`;
   renderControlPanel();
 }));
+els.telegramModalClose.addEventListener("click", closeTelegramModal);
+els.telegramModalCancel.addEventListener("click", closeTelegramModal);
+els.telegramModalSave.addEventListener("click", () => saveTelegramModal().catch((error) => {
+  els.telegramModalError.hidden = false;
+  els.telegramModalError.textContent = error.message || "Не удалось сохранить настройки.";
+}));
+els.telegramModal.addEventListener("click", (event) => {
+  if (event.target === els.telegramModal) closeTelegramModal();
+});
 
 async function refreshSidebar() {
   try {
