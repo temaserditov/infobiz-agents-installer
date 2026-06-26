@@ -76,5 +76,17 @@ say_step "Removing old DMG quarantine leftovers"
 /usr/bin/xattr -dr com.apple.quarantine "$INSTALL_ROOT" "$CONFIG_DIR" "$HERMES_ROOT" >/dev/null 2>&1 || true
 /usr/bin/xattr -dr com.apple.provenance "$INSTALL_ROOT" "$CONFIG_DIR" "$HERMES_ROOT" >/dev/null 2>&1 || true
 
+say_step "Removing PATH entries added by installers"
+for rc in "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.bash_profile" "$HOME/.bashrc"; do
+  [[ -f "$rc" ]] || continue
+  if /usr/bin/grep -Fq 'Infobiz Agents: ensure' "$rc" 2>/dev/null; then
+    /usr/bin/grep -v -F \
+      -e '# Infobiz Agents: ensure ~/.local/bin (hermes) on PATH' \
+      -e 'export PATH="$HOME/.local/bin:$PATH"' \
+      "$rc" > "$rc.infobiz.tmp" && /bin/mv "$rc.infobiz.tmp" "$rc"
+    printf "cleaned PATH entry from %s\n" "$rc"
+  fi
+done
+
 say_step "Done"
 printf "All Infobiz Agents / test Hermes installer artifacts were removed.\n"

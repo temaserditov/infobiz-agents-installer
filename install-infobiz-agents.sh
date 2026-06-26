@@ -496,6 +496,26 @@ install_hermes_from_source() {
   fi
 }
 
+persist_local_bin_path() {
+  # The installer symlinks the `hermes` command into ~/.local/bin, but on a
+  # fresh machine that directory is often NOT on the interactive shell's PATH
+  # (e.g. an empty ~/.zshrc), so `hermes` comes back as "command not found".
+  # Persist ~/.local/bin onto PATH in the user's shell rc files. Idempotent.
+  local line='export PATH="$HOME/.local/bin:$PATH"'
+  local marker='# Infobiz Agents: ensure ~/.local/bin (hermes) on PATH'
+  local rc
+  local targets=("$HOME/.zshrc" "$HOME/.zprofile")
+  case "${SHELL:-}" in
+    *bash*) targets+=("$HOME/.bash_profile") ;;
+  esac
+  for rc in "${targets[@]}"; do
+    if [[ ! -f "$rc" ]] || ! /usr/bin/grep -Fq '.local/bin' "$rc" 2>/dev/null; then
+      printf '\n%s\n%s\n' "$marker" "$line" >> "$rc"
+      printf "PATH persisted in %s\n" "$rc" >> "$LOG_FILE"
+    fi
+  done
+}
+
 need_profile_payload() {
   if [[ -n "$PROFILE_TARBALL" && -f "$PROFILE_TARBALL" ]]; then
     printf "%s" "$PROFILE_TARBALL"
@@ -1112,6 +1132,9 @@ for profile in "${(@s:,:)AGENT_PROFILES}"; do
   run_hermes -p "$profile" gateway start >> "$LOG_FILE" 2>&1 || true
 done
 
+say "Configuring terminal PATH for 'hermes'"
+persist_local_bin_path
+
 say "Installing local web panel"
 web_shell_url="$(install_web_shell)" || fail "Could not install local web panel"
 
@@ -1123,3 +1146,4 @@ printf "Installed %s. Open the web panel to configure Telegram and use the agent
 printf "%s\n" "$web_shell_url"
 printf "Shortcut: %s\n" "$web_shell_app"
 printf "Log file: %s\n" "$LOG_FILE"
+printf "\nTerminal command 'hermes' is ready. Open a NEW terminal window (or run: source ~/.zshrc), then verify with: hermes --version\n"
