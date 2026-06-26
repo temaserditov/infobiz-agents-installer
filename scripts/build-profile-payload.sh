@@ -56,7 +56,12 @@ copy_agent() {
   while IFS= read -r md_file; do
     /usr/bin/perl -0pi -e 's/\bdo not pretend to be\b/do not present yourself as/gi; s/\bmust not pretend\b/must not claim/gi; s/\bdo not pretend\b/do not claim/gi; s/\bpretending\b/claiming/gi; s/\bpretend\b/claim/gi' "$md_file"
   done < <(/usr/bin/find "$target_dir" -type f -name '*.md')
-  if [[ -f "$target_dir/SOUL.md" ]]; then
+  if [[ -f "$target_dir/SOUL.md" ]] && /usr/bin/grep -q "Installed identity guard" "$target_dir/SOUL.md"; then
+    # Source SOUL already carries an authored identity guard (e.g. the refactored
+    # per-role team-intro guard pulled from the live Hermes profiles). Do NOT
+    # prepend the generic guard again — that would double-inject. Idempotent.
+    echo "identity guard already present in $target_name/SOUL.md — keeping authored guard" >&2
+  elif [[ -f "$target_dir/SOUL.md" ]]; then
     soul_tmp="$target_dir/SOUL.md.tmp"
     cat > "$soul_tmp" <<IDENTITY
 # Installed identity guard
