@@ -42,6 +42,86 @@ if [[ -d "$PAYLOAD/agents/producer" ]]; then
   fail "Unexpected producer profile found in payload"
 fi
 
+say "Checking student skill allowlist"
+python3 - "$PAYLOAD" <<'PY'
+import sys
+from pathlib import Path
+
+payload = Path(sys.argv[1])
+allowed = {
+    "marketer": {
+        "audience-map-basic",
+        "content-plan-basic",
+        "discovery-diagnosis",
+        "funnel-diagnosis-basic",
+        "offer-builder-basic",
+        "reality-check",
+        "team-brief-builder",
+        "telegram-warmup-basic",
+    },
+    "copywriter": {
+        "chatplace-script-copy",
+        "copy-editing-basic",
+        "email-sequence-basic",
+        "followup-basic",
+        "landing-copy-basic",
+        "reels-script-basic",
+        "rewrite-anti-gpt",
+        "telegram-post-basic",
+        "warmup-sequence-basic",
+        "webinar-script-basic",
+    },
+    "designer": {
+        "canva-tilda-design-brief",
+        "cover-banner-brief",
+        "expert-landing-visual-pack",
+        "gpt-image-2-generation-basic",
+        "image-series-consistency",
+        "instagram-carousel-production",
+        "landing-visual-structure",
+        "mvp-visual-system-basic",
+        "presentation-structure-basic",
+        "tech-handoff-for-page",
+        "telegram-cover-and-creative-basic",
+        "visual-audit-basic",
+    },
+    "tech": {
+        "chatplace-basic-setup",
+        "form-debugging",
+        "mvp-funnel-tech-plan",
+        "no-code-mvp-stack",
+        "payment-debugging",
+        "payments-tech",
+        "safe-error-diagnosis",
+        "secrets-safety",
+        "telegram-bot-debugging",
+        "timeweb-deploy-basic",
+        "timeweb-deploy-tech",
+    },
+}
+
+required = {
+    "tech": {"payments-tech", "timeweb-deploy-tech"},
+}
+
+errors = []
+for profile, allowed_names in allowed.items():
+    skills_dir = payload / "agents" / profile / "skills"
+    actual = {p.name for p in skills_dir.iterdir() if p.is_dir()} if skills_dir.exists() else set()
+    unexpected = sorted(actual - allowed_names)
+    missing = sorted(required.get(profile, set()) - actual)
+    if unexpected:
+        errors.append(f"{profile}: unexpected/premium skills in student payload: {', '.join(unexpected)}")
+    if missing:
+        errors.append(f"{profile}: required student skills missing: {', '.join(missing)}")
+
+if errors:
+    print("\n".join(errors))
+    raise SystemExit(1)
+
+print("Student skill allowlist looks sane.")
+PY
+
 say "Checking Hermes context-file scanner"
 "$PYTHON_BIN" - "$PAYLOAD" "$HERMES_AGENT_ROOT" <<'PY'
 import sys

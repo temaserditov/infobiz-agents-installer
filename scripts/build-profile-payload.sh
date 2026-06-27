@@ -28,6 +28,81 @@ fi
 rm -rf "$BUILD_DIR"
 mkdir -p "$PAYLOAD_DIR/agents" "$PAYLOAD_DIR/default" "$PAYLOAD_DIR/skills" "$OUT_DIR"
 
+allowed_skills_for_profile() {
+  case "$1" in
+    marketer)
+      printf "%s\n" \
+        audience-map-basic \
+        content-plan-basic \
+        discovery-diagnosis \
+        funnel-diagnosis-basic \
+        offer-builder-basic \
+        reality-check \
+        team-brief-builder \
+        telegram-warmup-basic
+      ;;
+    copywriter)
+      printf "%s\n" \
+        chatplace-script-copy \
+        copy-editing-basic \
+        email-sequence-basic \
+        followup-basic \
+        landing-copy-basic \
+        reels-script-basic \
+        rewrite-anti-gpt \
+        telegram-post-basic \
+        warmup-sequence-basic \
+        webinar-script-basic
+      ;;
+    designer)
+      printf "%s\n" \
+        canva-tilda-design-brief \
+        cover-banner-brief \
+        expert-landing-visual-pack \
+        gpt-image-2-generation-basic \
+        image-series-consistency \
+        instagram-carousel-production \
+        landing-visual-structure \
+        mvp-visual-system-basic \
+        presentation-structure-basic \
+        tech-handoff-for-page \
+        telegram-cover-and-creative-basic \
+        visual-audit-basic
+      ;;
+    tech)
+      printf "%s\n" \
+        chatplace-basic-setup \
+        form-debugging \
+        mvp-funnel-tech-plan \
+        no-code-mvp-stack \
+        payment-debugging \
+        payments-tech \
+        safe-error-diagnosis \
+        secrets-safety \
+        telegram-bot-debugging \
+        timeweb-deploy-basic \
+        timeweb-deploy-tech
+      ;;
+  esac
+}
+
+prune_agent_skills() {
+  local target_name="$1"
+  local skills_dir="$PAYLOAD_DIR/agents/$target_name/skills"
+  local allowed_file="$BUILD_DIR/allowed-skills-$target_name.txt"
+  local skill_dir skill_name
+  [[ -d "$skills_dir" ]] || return 0
+
+  allowed_skills_for_profile "$target_name" > "$allowed_file"
+  find "$skills_dir" -mindepth 1 -maxdepth 1 -type d -print0 | while IFS= read -r -d '' skill_dir; do
+    skill_name="$(basename "$skill_dir")"
+    if ! /usr/bin/grep -Fxq "$skill_name" "$allowed_file"; then
+      echo "removed non-student skill from $target_name: $skill_name" >&2
+      rm -rf "$skill_dir"
+    fi
+  done
+}
+
 copy_agent() {
   local source_name="$1"
   local target_name="$2"
@@ -56,6 +131,7 @@ copy_agent() {
   while IFS= read -r md_file; do
     /usr/bin/perl -0pi -e 's/\bdo not pretend to be\b/do not present yourself as/gi; s/\bmust not pretend\b/must not claim/gi; s/\bdo not pretend\b/do not claim/gi; s/\bpretending\b/claiming/gi; s/\bpretend\b/claim/gi' "$md_file"
   done < <(/usr/bin/find "$target_dir" -type f -name '*.md')
+  prune_agent_skills "$target_name"
   if [[ -f "$target_dir/SOUL.md" ]] && /usr/bin/grep -q "Installed identity guard" "$target_dir/SOUL.md"; then
     # Source SOUL already carries an authored identity guard (e.g. the refactored
     # per-role team-intro guard pulled from the live Hermes profiles). Do NOT
