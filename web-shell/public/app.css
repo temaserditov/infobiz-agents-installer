@@ -2046,6 +2046,26 @@ button:disabled {
   font-size: 12px;
 }
 
+.settings-hint a {
+  color: #2f95cf;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.settings-hint a:hover {
+  text-decoration: underline;
+}
+
+.settings-hint code {
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;

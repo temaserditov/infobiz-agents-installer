@@ -1183,9 +1183,9 @@ function openTelegramModal(agentId, mode) {
     ? `Telegram ID: ${agent?.name || agentId}`
     : `Токен бота: ${agent?.name || agentId}`;
   els.telegramModalFieldLabel.textContent = mode === "id" ? "Telegram ID" : "Bot token";
-  els.telegramModalHint.textContent = mode === "id"
+  els.telegramModalHint.innerHTML = mode === "id"
     ? "Можно добавить несколько ID через запятую или с новой строки. Пустое поле снимет ограничение."
-    : "Вставь токен из BotFather. После сохранения Telegram gateway перезапустится автоматически.";
+    : 'Где взять токен: открой <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a>, нажми Start, отправь <code>/newbot</code>, задай имя и username бота, затем скопируй token вида <code>1234567890:AA...</code>. После сохранения Telegram gateway перезапустится автоматически.';
   els.telegramModal.hidden = false;
   window.setTimeout(() => els.telegramModalInput.focus(), 0);
 }
@@ -1302,7 +1302,7 @@ function openVoiceModal(agentId) {
     ? `ключ уже сохранен: ${profile.groqKeyPreview}`
     : "gsk_...";
   els.voiceModalApplyAll.checked = true;
-  els.voiceModalHint.textContent = "Hermes работает без ключа. Для Groq вставь API-ключ gsk_..., и WebShell сам перезапустит gateway.";
+  els.voiceModalHint.innerHTML = 'Hermes работает без ключа. Для Groq открой <a href="https://console.groq.com/keys" target="_blank" rel="noopener">Groq API Keys</a>, создай ключ, скопируй значение вида <code>gsk_...</code> и вставь сюда. После сохранения WebShell сам перезапустит gateway.';
   refreshVoiceProviderFields();
   els.voiceModal.hidden = false;
   window.setTimeout(() => els.voiceModalProvider.focus(), 0);
