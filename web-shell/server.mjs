@@ -72,6 +72,15 @@ const OPENAI_CODEX_MODEL_OPTIONS = (process.env.INFOBIZ_MODEL_OPTIONS || "gpt-5.
   .map((item) => item.trim())
   .filter(Boolean);
 const OPENAI_CODEX_MODEL_FALLBACK = process.env.INFOBIZ_MODEL_FALLBACK || "gpt-5.3";
+const GROQ_STT_MODEL_OPTIONS = (process.env.INFOBIZ_STT_GROQ_MODELS || "whisper-large-v3-turbo,whisper-large-v3,distil-whisper-large-v3-en")
+  .split(",")
+  .map((item) => item.trim())
+  .filter(Boolean);
+const GROQ_STT_MODEL_FALLBACK = process.env.INFOBIZ_STT_GROQ_FALLBACK || GROQ_STT_MODEL_OPTIONS[0] || "whisper-large-v3-turbo";
+const STT_PROVIDER_OPTIONS = [
+  { id: "local", label: "Hermes", description: "Родной speech-to-text без API-ключа" },
+  { id: "groq", label: "Groq", description: "Groq Whisper API через ключ gsk_..." },
+];
 const WEB_FORBIDDEN_TOOLSETS = ["browser", "chatplace", "cronjob", "delegation", "kanban", "memory", "session_search", "todo", "tts"];
 const CONTEXT_BLOAT_PATHS = [
   join(HERMES_WORKSPACES_ROOT, "assistant", "projects", "open-design"),
@@ -674,10 +683,11 @@ function runCommand(command, args, options = {}) {
 function redactSensitiveText(value) {
   return String(value || "")
     .replace(/\b\d{6,}:[A-Za-z0-9_-]{20,}\b/g, "[telegram-token]")
+    .replace(/\bgsk_[A-Za-z0-9_-]{16,}\b/g, "[groq-key]")
     .replace(/\bsk-proj-[A-Za-z0-9_-]{20,}\b/g, "[openai-key]")
     .replace(/\bsk-[A-Za-z0-9_-]{20,}\b/g, "[openai-key]")
     .replace(/(Authorization:\s*Bearer\s+)[^\s"'<>]+/gi, "$1[redacted]")
-    .replace(/((?:OPENAI_API_KEY|TELEGRAM_BOT_TOKEN|WEB_SHELL_ACCESS_TOKEN|INFOBIZ_SUPPORT_TOKEN|TOKEN|SECRET|PASSWORD|AUTH|BEARER)\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;]+)/gi, "$1[redacted]");
+    .replace(/((?:OPENAI_API_KEY|GROQ_API_KEY|TELEGRAM_BOT_TOKEN|WEB_SHELL_ACCESS_TOKEN|INFOBIZ_SUPPORT_TOKEN|TOKEN|SECRET|PASSWORD|AUTH|BEARER)\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;]+)/gi, "$1[redacted]");
 }
 
 function redactSensitive(value) {
@@ -1057,6 +1067,27 @@ function configSummary(agentId) {
   return { maxTurns, idleMinutes, apiMaxRetries, provider, model, contextLength, disabledToolsets: disabled };
 }
 
+function stripYamlScalar(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+#.*$/, "")
+    .replace(/^["']|["']$/g, "")
+    .trim();
+}
+
+function sttConfigSummary(agentId) {
+  const config = readText(join(profileDir(agentId), "config.yaml"), "");
+  const block = config.match(/^stt:\s*\n((?:  .*(?:\n|$))*)/m)?.[1] || "";
+  const provider = stripYamlScalar(block.match(/^  provider:\s*(.+)$/m)?.[1] || "local") || "local";
+  const localModel = stripYamlScalar(block.match(/^  local:\s*\n(?:    .*(?:\n|$))*?    model:\s*(.+)$/m)?.[1] || "");
+  const groqModel = stripYamlScalar(block.match(/^  groq:\s*\n(?:    .*(?:\n|$))*?    model:\s*(.+)$/m)?.[1] || "");
+  return {
+    provider,
+    localModel,
+    groqModel,
+  };
+}
+
 function modelSettings(agentId) {
   const config = configSummary(agentId);
   const env = readText(envPath(agentId), "");
@@ -1189,6 +1220,211 @@ function saveModelSettings(models) {
     results.push(saveModelSetting(agentId, model));
   }
   return { ok: true, settings: modelSettingsAll(), results };
+}
+
+function sttProviderLabel(provider) {
+  return STT_PROVIDER_OPTIONS.find((option) => option.id === provider)?.label || provider || "Hermes";
+}
+
+function groqKeyPreview(key) {
+  if (!key) return "";
+  return `${key.slice(0, 7)}...${key.slice(-4)}`;
+}
+
+function validateSttProvider(provider) {
+  const value = String(provider || "local").trim().toLowerCase();
+  if (value === "hermes") return "local";
+  if (!STT_PROVIDER_OPTIONS.some((option) => option.id === value)) {
+    throw new Error(`unsupported voice engine: ${provider}`);
+  }
+  return value;
+}
+
+function validateGroqApiKey(key) {
+  const value = String(key || "").trim();
+  if (!value) return "";
+  if (!/^gsk_[A-Za-z0-9_-]{16,}$/.test(value)) {
+    throw new Error("invalid Groq API key");
+  }
+  return value;
+}
+
+function validateGroqSttModel(model) {
+  const value = String(model || GROQ_STT_MODEL_FALLBACK).trim();
+  if (!value) return GROQ_STT_MODEL_FALLBACK;
+  if (!GROQ_STT_MODEL_OPTIONS.includes(value)) {
+    throw new Error(`unsupported Groq STT model: ${value}`);
+  }
+  return value;
+}
+
+function voiceSettings(agentId) {
+  const env = readText(envPath(agentId), "");
+  const stt = sttConfigSummary(agentId);
+  const rawProvider = String(stt.provider || "local").trim().toLowerCase();
+  const provider = STT_PROVIDER_OPTIONS.some((option) => option.id === rawProvider) ? rawProvider : "local";
+  const groqKey = readEnvValue(env, "GROQ_API_KEY");
+  const envGroqModel = readEnvValue(env, "STT_GROQ_MODEL");
+  const groqModel = stt.groqModel || envGroqModel || GROQ_STT_MODEL_FALLBACK;
+  const localModel = stt.localModel || "base";
+  return {
+    ok: existsSync(profileDir(agentId)),
+    profile: agentId,
+    name: nameLabel(agentId),
+    provider,
+    providerLabel: sttProviderLabel(provider),
+    unsupportedProvider: provider === rawProvider ? "" : rawProvider,
+    model: provider === "groq" ? groqModel : localModel,
+    groqModel,
+    localModel,
+    groqConfigured: Boolean(groqKey),
+    groqKeyPreview: groqKeyPreview(groqKey),
+    envPath: envPath(agentId),
+    gateway: agentDiagnostics(agentId).gateway.status,
+  };
+}
+
+function voiceSettingsAll() {
+  const profiles = PROFILE_ORDER
+    .filter((id) => existsSync(profileDir(id)))
+    .map((id) => voiceSettings(id));
+  const providers = [...new Set(profiles.map((profile) => profile.provider))];
+  return {
+    ok: true,
+    options: STT_PROVIDER_OPTIONS,
+    groqModels: GROQ_STT_MODEL_OPTIONS,
+    groqFallbackModel: GROQ_STT_MODEL_FALLBACK,
+    provider: providers.length === 1 ? providers[0] : "mixed",
+    providerLabel: providers.length === 1 ? sttProviderLabel(providers[0]) : "Разные",
+    profiles,
+    groqEnabled: profiles.filter((profile) => profile.provider === "groq").length,
+    groqConfigured: profiles.filter((profile) => profile.provider === "groq" && profile.groqConfigured).length,
+    total: profiles.length,
+  };
+}
+
+function writeConfigStt(agentId, provider, groqModel) {
+  const configPath = join(profileDir(agentId), "config.yaml");
+  const code = String.raw`
+import re
+import sys
+from pathlib import Path
+
+try:
+    import yaml
+except Exception:
+    yaml = None
+
+path = Path(sys.argv[1])
+provider = sys.argv[2]
+groq_model = sys.argv[3]
+
+if yaml:
+    data = yaml.safe_load(path.read_text(encoding="utf-8", errors="ignore") if path.exists() else "") or {}
+    if not isinstance(data, dict):
+        data = {}
+    stt = data.setdefault("stt", {})
+    if not isinstance(stt, dict):
+        stt = {}
+        data["stt"] = stt
+    stt["enabled"] = True
+    stt["provider"] = provider
+    local = stt.setdefault("local", {})
+    if isinstance(local, dict):
+        local.setdefault("model", "base")
+    else:
+        stt["local"] = {"model": "base"}
+    if provider == "groq":
+        groq = stt.setdefault("groq", {})
+        if not isinstance(groq, dict):
+            groq = {}
+            stt["groq"] = groq
+        groq["model"] = groq_model
+    path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+else:
+    text = path.read_text(encoding="utf-8", errors="ignore") if path.exists() else ""
+    stt_block = "stt:\n  enabled: true\n  provider: " + provider + "\n  local:\n    model: base\n"
+    if provider == "groq":
+        stt_block += "  groq:\n    model: " + groq_model + "\n"
+    if re.search(r"(?m)^stt:\s*$", text):
+        text = re.sub(r"(?ms)^stt:\s*\n(?:  .*\n?)*", stt_block, text, count=1)
+    else:
+        text = text.rstrip() + "\n\n" + stt_block
+    path.write_text(text, encoding="utf-8")
+`;
+  const result = spawnSync(HERMES_PYTHON, ["-", configPath, provider, groqModel], {
+    input: code,
+    encoding: "utf8",
+    env: { ...process.env, HERMES_HOME: profileDir(agentId) },
+    cwd: HERMES_AGENT_ROOT,
+  });
+  if (result.status !== 0) {
+    throw new Error((result.stderr || result.stdout || "Could not write STT config").trim());
+  }
+}
+
+function saveVoiceSetting(agentId, { provider, groqApiKey, updateGroqApiKey = false, groqModel } = {}) {
+  provider = validateSttProvider(provider);
+  groqModel = validateGroqSttModel(groqModel);
+  groqApiKey = validateGroqApiKey(groqApiKey);
+  const before = voiceSettings(agentId);
+  const path = envPath(agentId);
+  let text = readText(path, "");
+  if (provider === "groq") {
+    if (updateGroqApiKey) {
+      if (!groqApiKey) throw new Error("Groq API key is required");
+      text = writeEnvValue(text, "GROQ_API_KEY", groqApiKey);
+    } else if (!readEnvValue(text, "GROQ_API_KEY")) {
+      throw new Error(`Вставь Groq API key для «${nameLabel(agentId)}»`);
+    }
+    text = writeEnvValue(text, "STT_GROQ_MODEL", groqModel);
+  }
+  text = writeEnvValue(text, "INFOBIZ_VOICE_ENGINE", provider);
+  writeFileSync(path, text, { encoding: "utf8", mode: 0o600 });
+  writeConfigStt(agentId, provider, groqModel);
+  let restart = { ok: false, restarted: false };
+  try {
+    restart = restartAgentGateway(agentId);
+  } catch (error) {
+    restart = { ok: false, restarted: false, error: error.message || String(error) };
+  }
+  const settings = voiceSettings(agentId);
+  return {
+    ok: true,
+    profile: agentId,
+    name: nameLabel(agentId),
+    changed: before.provider !== settings.provider || before.model !== settings.model || before.groqConfigured !== settings.groqConfigured,
+    settings,
+    restart,
+  };
+}
+
+function saveVoiceSettings({ provider, groqApiKey, updateGroqApiKey = false, groqModel, agentIds = null } = {}) {
+  const allowed = new Set(PROFILE_ORDER);
+  const targets = (Array.isArray(agentIds) && agentIds.length ? agentIds : PROFILE_ORDER)
+    .map((id) => String(id || "").trim())
+    .filter((id) => allowed.has(id) && existsSync(profileDir(id)));
+  const results = [];
+  for (const agentId of targets) {
+    const before = voiceSettings(agentId);
+    const normalizedProvider = validateSttProvider(provider);
+    const normalizedModel = validateGroqSttModel(groqModel);
+    if (
+      normalizedProvider === before.provider &&
+      (normalizedProvider !== "groq" || before.groqModel === normalizedModel) &&
+      (normalizedProvider !== "groq" || before.groqConfigured || updateGroqApiKey) &&
+      (!updateGroqApiKey || !groqApiKey)
+    ) {
+      continue;
+    }
+    results.push(saveVoiceSetting(agentId, {
+      provider: normalizedProvider,
+      groqApiKey,
+      updateGroqApiKey,
+      groqModel: normalizedModel,
+    }));
+  }
+  return { ok: true, settings: voiceSettingsAll(), results };
 }
 
 function listSkillNames(dir) {
@@ -2916,6 +3152,7 @@ function profileRuntimeFiles(agentId) {
   const env = readText(join(dir, ".env"), "");
   const kanbanMatch = config.match(/^kanban:\s*\n(?:  .*\n)*?  dispatch_in_gateway:\s*(true|false)\s*$/m);
   const modelMatch = config.match(/^\s*(?:default|model):\s*['"]?([^'"\n]+)['"]?\s*$/m);
+  const stt = sttConfigSummary(agentId);
   return {
     profileDir: dir,
     soulExists: existsSync(join(dir, "SOUL.md")),
@@ -2926,6 +3163,8 @@ function profileRuntimeFiles(agentId) {
     modelHint: modelMatch ? modelMatch[1].trim() : "",
     envExists: existsSync(join(dir, ".env")),
     telegramConfigured: Boolean(readEnvValue(env, "TELEGRAM_BOT_TOKEN")),
+    sttProvider: stt.provider,
+    groqSttConfigured: Boolean(readEnvValue(env, "GROQ_API_KEY")),
     kanbanEnv: readEnvValue(env, "HERMES_KANBAN_DISPATCH_IN_GATEWAY"),
     hermesHomeEnv: readEnvValue(env, "HERMES_HOME"),
   };
@@ -2939,6 +3178,7 @@ function supportBundle() {
       name: nameLabel(id),
       diagnostics: supportSection("diagnostics", () => agentDiagnostics(id)),
       telegram: supportSection("telegram", () => telegramSettings(id)),
+      voice: supportSection("voice", () => voiceSettings(id)),
       runtimeFiles: supportSection("runtimeFiles", () => profileRuntimeFiles(id)),
       logs: {
         gateway: safeTail(join(profileDir(id), "logs", "gateway.log"), 260),
@@ -3799,6 +4039,23 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/voice") {
+      sendJson(res, 200, voiceSettingsAll());
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/voice") {
+      const body = await readBody(req);
+      sendJson(res, 200, saveVoiceSettings({
+        provider: body.provider,
+        groqApiKey: String(body.groqApiKey || "").trim(),
+        updateGroqApiKey: Object.prototype.hasOwnProperty.call(body, "groqApiKey") && String(body.groqApiKey || "").trim().length > 0,
+        groqModel: body.groqModel,
+        agentIds: Array.isArray(body.agentIds) ? body.agentIds : null,
+      }));
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/model-matrix") {
       sendJson(res, 200, modelMatrixSummary());
       return;
@@ -4005,6 +4262,23 @@ const server = http.createServer(async (req, res) => {
         allowedUsers: body.allowedUsers,
         updateToken: Object.prototype.hasOwnProperty.call(body, "token"),
         updateAllowedUsers: Object.prototype.hasOwnProperty.call(body, "allowedUsers"),
+      }));
+      return;
+    }
+
+    const agentVoiceMatch = url.pathname.match(/^\/api\/agents\/([^/]+)\/voice$/);
+    if (req.method === "GET" && agentVoiceMatch) {
+      sendJson(res, 200, voiceSettings(agentVoiceMatch[1]));
+      return;
+    }
+
+    if (req.method === "POST" && agentVoiceMatch) {
+      const body = await readBody(req);
+      sendJson(res, 200, saveVoiceSetting(agentVoiceMatch[1], {
+        provider: body.provider,
+        groqApiKey: String(body.groqApiKey || "").trim(),
+        updateGroqApiKey: Object.prototype.hasOwnProperty.call(body, "groqApiKey") && String(body.groqApiKey || "").trim().length > 0,
+        groqModel: body.groqModel,
       }));
       return;
     }

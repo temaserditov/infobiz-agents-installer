@@ -2115,6 +2115,21 @@ button:disabled {
   min-height: 44px;
 }
 
+.modal-check {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 14px 20px 0;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.modal-check input {
+  width: 16px;
+  height: 16px;
+  accent-color: #40a7e3;
+}
+
 .modal-field textarea:focus,
 .modal-select:focus {
   border-color: #40a7e3;
@@ -2504,7 +2519,7 @@ button:disabled {
 
 .control-summary {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 10px;
   margin-bottom: 14px;
 }

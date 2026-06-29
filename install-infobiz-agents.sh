@@ -575,6 +575,9 @@ write_profile_env() {
   cat > "$profile_root/.env" <<ENV
 TELEGRAM_BOT_TOKEN=''
 GATEWAY_ALLOW_ALL_USERS='true'
+GROQ_API_KEY=''
+STT_GROQ_MODEL='whisper-large-v3-turbo'
+INFOBIZ_VOICE_ENGINE='local'
 HERMES_INFERENCE_PROVIDER='openai-codex'
 HERMES_INFERENCE_MODEL='gpt-5.3'
 HERMES_HOME=$(shell_quote "$profile_root")

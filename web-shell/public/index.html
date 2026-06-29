@@ -255,6 +255,10 @@
           <span id="telegramModalFieldLabel">Значение</span>
           <textarea id="telegramModalInput" rows="4" autocomplete="off" spellcheck="false"></textarea>
         </label>
+        <label id="telegramModalApplyAllRow" class="modal-check" hidden>
+          <input id="telegramModalApplyAll" type="checkbox" />
+          <span>Применить этот ID ко всем агентам</span>
+        </label>
         <div id="telegramModalHint" class="settings-hint"></div>
         <div id="telegramModalError" class="settings-status error" hidden></div>
         <div class="modal-actions">
@@ -281,6 +285,41 @@
         <div class="modal-actions">
           <button id="modelModalCancel" type="button" class="mini-action">Отмена</button>
           <button id="modelModalSave" type="button" class="settings-save">Сохранить</button>
+        </div>
+      </section>
+    </div>
+
+    <div id="voiceModal" class="modal-backdrop" hidden>
+      <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="voiceModalTitle">
+        <header class="modal-head">
+          <strong id="voiceModalTitle">Голосовой движок</strong>
+          <button id="voiceModalClose" type="button" class="card-icon-btn" aria-label="Закрыть">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="m13.4 12 4.3-4.3-1.4-1.4-4.3 4.3-4.3-4.3-1.4 1.4 4.3 4.3-4.3 4.3 1.4 1.4 4.3-4.3 4.3 4.3 1.4-1.4z"/></svg>
+          </button>
+        </header>
+        <label class="modal-field">
+          <span>Speech-to-text</span>
+          <select id="voiceModalProvider" class="modal-select"></select>
+        </label>
+        <div id="voiceGroqFields">
+          <label class="modal-field">
+            <span>Groq API key</span>
+            <textarea id="voiceModalGroqKey" rows="2" autocomplete="off" spellcheck="false" placeholder="gsk_..."></textarea>
+          </label>
+          <label class="modal-field">
+            <span>Модель Groq</span>
+            <select id="voiceModalGroqModel" class="modal-select"></select>
+          </label>
+        </div>
+        <label class="modal-check">
+          <input id="voiceModalApplyAll" type="checkbox" checked />
+          <span>Применить ко всем агентам</span>
+        </label>
+        <div id="voiceModalHint" class="settings-hint"></div>
+        <div id="voiceModalError" class="settings-status error" hidden></div>
+        <div class="modal-actions">
+          <button id="voiceModalCancel" type="button" class="mini-action">Отмена</button>
+          <button id="voiceModalSave" type="button" class="settings-save">Сохранить</button>
         </div>
       </section>
     </div>

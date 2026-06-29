@@ -34,6 +34,7 @@ const state = {
   inventory: null,
   modelMatrix: null,
   modelSettings: null,
+  voiceSettings: null,
   configDrift: null,
   telegramSettings: null,
   controlMessage: "",
@@ -68,6 +69,9 @@ const state = {
     agentId: "",
   },
   modelModal: {
+    agentId: "",
+  },
+  voiceModal: {
     agentId: "",
   },
 };
@@ -167,6 +171,8 @@ const els = {
   telegramModalCancel: document.querySelector("#telegramModalCancel") || nullEl,
   telegramModalSave: document.querySelector("#telegramModalSave") || nullEl,
   telegramModalInput: document.querySelector("#telegramModalInput") || nullEl,
+  telegramModalApplyAllRow: document.querySelector("#telegramModalApplyAllRow") || nullEl,
+  telegramModalApplyAll: document.querySelector("#telegramModalApplyAll") || nullEl,
   telegramModalFieldLabel: document.querySelector("#telegramModalFieldLabel") || nullEl,
   telegramModalHint: document.querySelector("#telegramModalHint") || nullEl,
   telegramModalError: document.querySelector("#telegramModalError") || nullEl,
@@ -178,6 +184,18 @@ const els = {
   modelModalSelect: document.querySelector("#modelModalSelect") || nullEl,
   modelModalHint: document.querySelector("#modelModalHint") || nullEl,
   modelModalError: document.querySelector("#modelModalError") || nullEl,
+  voiceModal: document.querySelector("#voiceModal") || nullEl,
+  voiceModalTitle: document.querySelector("#voiceModalTitle") || nullEl,
+  voiceModalClose: document.querySelector("#voiceModalClose") || nullEl,
+  voiceModalCancel: document.querySelector("#voiceModalCancel") || nullEl,
+  voiceModalSave: document.querySelector("#voiceModalSave") || nullEl,
+  voiceModalProvider: document.querySelector("#voiceModalProvider") || nullEl,
+  voiceGroqFields: document.querySelector("#voiceGroqFields") || nullEl,
+  voiceModalGroqKey: document.querySelector("#voiceModalGroqKey") || nullEl,
+  voiceModalGroqModel: document.querySelector("#voiceModalGroqModel") || nullEl,
+  voiceModalApplyAll: document.querySelector("#voiceModalApplyAll") || nullEl,
+  voiceModalHint: document.querySelector("#voiceModalHint") || nullEl,
+  voiceModalError: document.querySelector("#voiceModalError") || nullEl,
   brandTitle: document.querySelector("#brandTitle") || nullEl,
   brandSubtitle: document.querySelector("#brandSubtitle") || nullEl,
   newDocBtn: document.querySelector("#newDocBtn") || nullEl,
@@ -807,18 +825,25 @@ async function loadModelSettings() {
   renderModelSettings();
 }
 
+async function loadVoiceSettings() {
+  const data = await api("/api/voice");
+  state.voiceSettings = data;
+}
+
 async function loadControlPanel(message = "") {
-  const [agentsResult, healthResult, telegramResult, modelResult] = await Promise.allSettled([
+  const [agentsResult, healthResult, telegramResult, modelResult, voiceResult] = await Promise.allSettled([
     api("/api/agents"),
     api("/api/health"),
     api("/api/telegram"),
     api("/api/models"),
+    api("/api/voice"),
   ]);
   if (agentsResult.status === "fulfilled") state.agents = agentsResult.value.agents || [];
   if (healthResult.status === "fulfilled") state.health = healthResult.value;
   if (telegramResult.status === "fulfilled") state.telegramSettings = telegramResult.value;
   if (modelResult.status === "fulfilled") state.modelSettings = modelResult.value;
-  const partialFailure = [agentsResult, healthResult, telegramResult, modelResult].some((result) => result.status === "rejected");
+  if (voiceResult.status === "fulfilled") state.voiceSettings = voiceResult.value;
+  const partialFailure = [agentsResult, healthResult, telegramResult, modelResult, voiceResult].some((result) => result.status === "rejected");
   state.controlMessage = message || (partialFailure ? "Часть данных не загрузилась. Попробуй обновить страницу или скачай диагностику." : "");
   renderAgents();
   renderControlPanel();
@@ -828,6 +853,7 @@ function controlAgentMeta(agent) {
   const healthAgent = (state.health?.agents || []).find((item) => item.id === agent.id);
   const telegram = (state.telegramSettings?.profiles || []).find((item) => item.profile === agent.id);
   const model = (state.modelSettings?.profiles || []).find((item) => item.profile === agent.id);
+  const voice = (state.voiceSettings?.profiles || []).find((item) => item.profile === agent.id);
   const issues = healthAgent?.issues || [];
   return {
     health: healthAgent?.health || (agent.gateway === "running" ? "ok" : "attention"),
@@ -836,6 +862,7 @@ function controlAgentMeta(agent) {
     logs: healthAgent?.logs,
     telegram,
     model,
+    voice,
   };
 }
 
@@ -847,6 +874,9 @@ function renderControlPanel() {
   const telegramProfiles = state.telegramSettings?.profiles || [];
   const telegramReady = telegramProfiles.filter((profile) => profile.configured).length;
   const idReady = telegramProfiles.filter((profile) => profile.allowedUsersConfigured).length;
+  const voiceProfiles = state.voiceSettings?.profiles || [];
+  const groqReady = voiceProfiles.filter((profile) => profile.provider === "groq" && profile.groqConfigured).length;
+  const voiceLabel = state.voiceSettings?.providerLabel || "Hermes";
   const messageHtml = state.controlMessage
     ? `<div class="control-message">${escapeHtml(state.controlMessage)}</div>`
     : "";
@@ -872,6 +902,11 @@ function renderControlPanel() {
       <strong>${escapeHtml((state.modelSettings?.models || []).join(", ") || state.modelSettings?.fallback || "не задано")}</strong>
       <small>текущая конфигурация</small>
     </div>
+    <div class="control-stat ${state.voiceSettings?.provider === "groq" && groqReady !== voiceProfiles.length ? "attention" : "ok"}">
+      <span>Голос</span>
+      <strong>${escapeHtml(voiceLabel)}</strong>
+      <small>${state.voiceSettings?.provider === "groq" ? `${groqReady}/${voiceProfiles.length || 0} ключей` : "родной STT"}</small>
+    </div>
   `;
   els.controlAgents.innerHTML = agents.map((agent) => {
     const meta = controlAgentMeta(agent);
@@ -882,6 +917,11 @@ function renderControlPanel() {
     const tokenActionText = meta.telegram?.configured ? "Изменить токен" : "Привязать токен";
     const idActionText = meta.telegram?.allowedUsersConfigured ? "Добавить/изменить ID" : "Привязать ID";
     const modelText = meta.model?.current || meta.model?.model || state.modelSettings?.fallback || "не задано";
+    const voiceProvider = meta.voice?.provider || "local";
+    const voiceText = voiceProvider === "groq"
+      ? (meta.voice?.groqConfigured ? "Groq" : "Groq: ключ не добавлен")
+      : "Hermes";
+    const voiceStatus = voiceProvider === "groq" && !meta.voice?.groqConfigured ? "bad" : "ok";
     const issueText = meta.issues.length ? meta.issues.slice(0, 2).join("; ") : "без критичных проблем";
     return `
       <article class="control-agent-card ${meta.health}" data-agent-card="${escapeHtml(agent.id)}">
@@ -897,11 +937,13 @@ function renderControlPanel() {
           <div><span>Телеграм-бот</span><strong class="control-status-text ${tokenStatus}">${tokenText}</strong></div>
           <div><span>Сессии</span><strong>${meta.sessions?.count ?? "?"}</strong></div>
           <div><span>Телеграм ID</span><strong class="control-status-text ${idStatus}">${idText}</strong></div>
+          <div><span>Голосовой движок</span><strong class="control-status-text ${voiceStatus}">${escapeHtml(voiceText)}</strong></div>
         </div>
         <div class="control-agent-issue">${escapeHtml(issueText)}</div>
         <div class="control-agent-actions">
           <button type="button" class="mini-action" data-action="restart-agent" data-agent="${escapeHtml(agent.id)}">Перезапустить</button>
           <button type="button" class="mini-action" data-action="edit-model" data-agent="${escapeHtml(agent.id)}">Выбрать модель</button>
+          <button type="button" class="mini-action" data-action="edit-voice" data-agent="${escapeHtml(agent.id)}">Изменить голос</button>
           <button type="button" class="mini-action" data-action="edit-token" data-agent="${escapeHtml(agent.id)}">${tokenActionText}</button>
           <button type="button" class="mini-action" data-action="edit-id" data-agent="${escapeHtml(agent.id)}">${idActionText}</button>
         </div>
@@ -1135,6 +1177,8 @@ function openTelegramModal(agentId, mode) {
   els.telegramModalInput.placeholder = mode === "id"
     ? "123456789, 987654321"
     : "1234567890:AA...";
+  els.telegramModalApplyAllRow.hidden = mode !== "id";
+  els.telegramModalApplyAll.checked = mode === "id";
   els.telegramModalTitle.textContent = mode === "id"
     ? `Telegram ID: ${agent?.name || agentId}`
     : `Токен бота: ${agent?.name || agentId}`;
@@ -1163,19 +1207,30 @@ async function saveTelegramModal() {
   els.telegramModalSave.disabled = true;
   els.telegramModalError.hidden = true;
   try {
-    const body = mode === "id"
-      ? { updateToken: false, updateAllowedUsers: true, allowedUsers: value }
-      : { updateToken: true, updateAllowedUsers: false, token: value };
-    const data = await api(`/api/agents/${agentId}/telegram`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
+    const applyAllIds = mode === "id" && els.telegramModalApplyAll.checked;
+    const data = applyAllIds
+      ? await api("/api/telegram", {
+        method: "POST",
+        body: JSON.stringify({
+          tokens: {},
+          allowedUsers: Object.fromEntries((state.telegramSettings?.profiles || []).map((profile) => [profile.profile, value])),
+        }),
+      })
+      : await api(`/api/agents/${agentId}/telegram`, {
+        method: "POST",
+        body: JSON.stringify(mode === "id"
+          ? { updateToken: false, updateAllowedUsers: true, allowedUsers: value }
+          : { updateToken: true, updateAllowedUsers: false, token: value }),
+      });
     const restart = data.restart;
     const agent = state.agents.find((item) => item.id === agentId);
     closeTelegramModal();
-    await loadControlPanel(restart && !restart.restarted
-      ? `${agent?.name || agentId}: настройки сохранены, но Telegram gateway не перезапустился`
-      : `${agent?.name || agentId}: Telegram обновлен`);
+    const failed = (data.results || []).filter((item) => item.restart && !item.restart.restarted);
+    await loadControlPanel(applyAllIds
+      ? (failed.length ? `Telegram ID сохранен, но gateway не перезапустился: ${failed.map((item) => item.name || item.profile).join(", ")}` : "Telegram ID обновлен для всех агентов")
+      : (restart && !restart.restarted
+        ? `${agent?.name || agentId}: настройки сохранены, но Telegram gateway не перезапустился`
+        : `${agent?.name || agentId}: Telegram обновлен`));
     await refreshSidebar();
   } catch (error) {
     els.telegramModalError.hidden = false;
@@ -1211,6 +1266,92 @@ function openModelModal(agentId) {
 function closeModelModal() {
   els.modelModal.hidden = true;
   state.modelModal = { agentId: "" };
+}
+
+function voiceProfileFor(agentId) {
+  return (state.voiceSettings?.profiles || []).find((profile) => profile.profile === agentId) || null;
+}
+
+function refreshVoiceProviderFields() {
+  const provider = els.voiceModalProvider.value || "local";
+  els.voiceGroqFields.hidden = provider !== "groq";
+}
+
+function openVoiceModal(agentId) {
+  const agent = state.agents.find((item) => item.id === agentId);
+  const profile = voiceProfileFor(agentId);
+  const options = state.voiceSettings?.options || [
+    { id: "local", label: "Hermes" },
+    { id: "groq", label: "Groq" },
+  ];
+  const groqModels = state.voiceSettings?.groqModels || ["whisper-large-v3-turbo"];
+  const currentProvider = profile?.provider || state.voiceSettings?.provider || "local";
+  const currentGroqModel = profile?.groqModel || state.voiceSettings?.groqFallbackModel || groqModels[0] || "whisper-large-v3-turbo";
+  state.voiceModal = { agentId };
+  els.voiceModalError.hidden = true;
+  els.voiceModalError.textContent = "";
+  els.voiceModalTitle.textContent = `Голосовой движок: ${agent?.name || agentId}`;
+  els.voiceModalProvider.innerHTML = options.map((option) => `
+    <option value="${escapeHtml(option.id)}"${option.id === currentProvider ? " selected" : ""}>${escapeHtml(option.label)}</option>
+  `).join("");
+  els.voiceModalGroqModel.innerHTML = groqModels.map((model) => `
+    <option value="${escapeHtml(model)}"${model === currentGroqModel ? " selected" : ""}>${escapeHtml(model)}</option>
+  `).join("");
+  els.voiceModalGroqKey.value = "";
+  els.voiceModalGroqKey.placeholder = profile?.groqConfigured
+    ? `ключ уже сохранен: ${profile.groqKeyPreview}`
+    : "gsk_...";
+  els.voiceModalApplyAll.checked = true;
+  els.voiceModalHint.textContent = "Hermes работает без ключа. Для Groq вставь API-ключ gsk_..., и WebShell сам перезапустит gateway.";
+  refreshVoiceProviderFields();
+  els.voiceModal.hidden = false;
+  window.setTimeout(() => els.voiceModalProvider.focus(), 0);
+}
+
+function closeVoiceModal() {
+  els.voiceModal.hidden = true;
+  state.voiceModal = { agentId: "" };
+}
+
+async function saveVoiceModal() {
+  const { agentId } = state.voiceModal;
+  if (!agentId) return;
+  const provider = els.voiceModalProvider.value.trim();
+  const groqApiKey = els.voiceModalGroqKey.value.trim();
+  const groqModel = els.voiceModalGroqModel.value.trim();
+  const applyAll = els.voiceModalApplyAll.checked;
+  if (provider === "groq" && groqApiKey && !/^gsk_[A-Za-z0-9_-]{16,}$/.test(groqApiKey)) {
+    els.voiceModalError.hidden = false;
+    els.voiceModalError.textContent = "Groq API key должен начинаться с gsk_.";
+    return;
+  }
+  els.voiceModalSave.disabled = true;
+  els.voiceModalError.hidden = true;
+  try {
+    const body = {
+      provider,
+      groqModel,
+      ...(groqApiKey ? { groqApiKey } : {}),
+      ...(applyAll ? {} : { agentIds: [agentId] }),
+    };
+    const data = await api(applyAll ? "/api/voice" : `/api/agents/${agentId}/voice`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    const agent = state.agents.find((item) => item.id === agentId);
+    closeVoiceModal();
+    const results = data.results || (data.profile ? [data] : []);
+    const failed = results.filter((item) => item.restart && !item.restart.restarted);
+    await loadControlPanel(applyAll
+      ? (failed.length ? `Голос сохранен, но gateway не перезапустился: ${failed.map((item) => item.name || item.profile).join(", ")}` : "Голосовой движок обновлен для всех агентов")
+      : (failed.length ? `${agent?.name || agentId}: голос сохранен, но gateway не перезапустился` : `${agent?.name || agentId}: голосовой движок обновлен`));
+    await refreshSidebar();
+  } catch (error) {
+    els.voiceModalError.hidden = false;
+    els.voiceModalError.textContent = error.message || "Не удалось сохранить голосовой движок.";
+  } finally {
+    els.voiceModalSave.disabled = false;
+  }
 }
 
 async function saveModelModal() {
@@ -1253,6 +1394,7 @@ async function handleControlAction(action, agentId) {
     return;
   }
   if (action === "edit-model") openModelModal(agentId);
+  if (action === "edit-voice") openVoiceModal(agentId);
   if (action === "edit-token") openTelegramModal(agentId, "token");
   if (action === "edit-id") openTelegramModal(agentId, "id");
 }
@@ -3755,7 +3897,8 @@ els.gcDelete.addEventListener("click", deleteGroupCard);
 
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
-  if (!els.modelModal.hidden) closeModelModal();
+  if (!els.voiceModal.hidden) closeVoiceModal();
+  else if (!els.modelModal.hidden) closeModelModal();
   else if (!els.telegramModal.hidden) closeTelegramModal();
   else if (!els.settingsPanel.hidden) closeSettings();
   else if (!els.groupCard.hidden) closeGroupCard();
@@ -3851,6 +3994,16 @@ els.modelModalSave.addEventListener("click", () => saveModelModal().catch((error
 }));
 els.modelModal.addEventListener("click", (event) => {
   if (event.target === els.modelModal) closeModelModal();
+});
+els.voiceModalClose.addEventListener("click", closeVoiceModal);
+els.voiceModalCancel.addEventListener("click", closeVoiceModal);
+els.voiceModalProvider.addEventListener("change", refreshVoiceProviderFields);
+els.voiceModalSave.addEventListener("click", () => saveVoiceModal().catch((error) => {
+  els.voiceModalError.hidden = false;
+  els.voiceModalError.textContent = error.message || "Не удалось сохранить голосовой движок.";
+}));
+els.voiceModal.addEventListener("click", (event) => {
+  if (event.target === els.voiceModal) closeVoiceModal();
 });
 
 async function refreshSidebar() {
