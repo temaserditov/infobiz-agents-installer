@@ -7,21 +7,38 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUT_DIR="$REPO_ROOT/dist"
 BUILD_DIR="$REPO_ROOT/profile-build"
 PAYLOAD_DIR="$BUILD_DIR/profile"
-AGENT_PRODUCT_SOURCE="${AGENT_PRODUCT_SOURCE:-$HOME/.hermes-workspaces/marketer/agent-product}"
+DEFAULT_AGENT_PRODUCT_SOURCE="$HOME/.hermes-workspaces/marketer/agent-product"
+AGENT_PRODUCT_SOURCE="${AGENT_PRODUCT_SOURCE:-$DEFAULT_AGENT_PRODUCT_SOURCE}"
+PRUNE_STUDENT_SKILLS="${PRUNE_STUDENT_SKILLS:-auto}"
 TARBALL="$OUT_DIR/infobiz-agent-profile-marketer-$VERSION.tar.gz"
 
+has_runtime_profiles() {
+  local root="$1"
+  [[ -d "$root/marketer" && -d "$root/copywriter" && -d "$root/designer" && -d "$root/tech" ]]
+}
+
+AGENT_SOURCE_MODE="agent-product"
 if [[ -d "$AGENT_PRODUCT_SOURCE/agents" ]]; then
   AGENT_SOURCE_ROOT="$AGENT_PRODUCT_SOURCE/agents"
 elif [[ -d "$AGENT_PRODUCT_SOURCE/03_RUNTIME_PROFILES_CLEAN" ]]; then
   AGENT_SOURCE_ROOT="$AGENT_PRODUCT_SOURCE/03_RUNTIME_PROFILES_CLEAN"
 elif [[ -d "$AGENT_PRODUCT_SOURCE/ai-marketer-for-expert" ]]; then
   AGENT_SOURCE_ROOT="$AGENT_PRODUCT_SOURCE"
+elif has_runtime_profiles "$AGENT_PRODUCT_SOURCE"; then
+  AGENT_SOURCE_ROOT="$AGENT_PRODUCT_SOURCE"
+  AGENT_SOURCE_MODE="hermes-profiles"
+elif [[ "$AGENT_PRODUCT_SOURCE" == "$DEFAULT_AGENT_PRODUCT_SOURCE" ]] && has_runtime_profiles "$HOME/.hermes/profiles"; then
+  AGENT_PRODUCT_SOURCE="$HOME/.hermes/profiles"
+  AGENT_SOURCE_ROOT="$AGENT_PRODUCT_SOURCE"
+  AGENT_SOURCE_MODE="hermes-profiles"
 else
   echo "Missing agent product source: $AGENT_PRODUCT_SOURCE" >&2
   echo "Expected one of:" >&2
   echo "  $AGENT_PRODUCT_SOURCE/agents" >&2
   echo "  $AGENT_PRODUCT_SOURCE/03_RUNTIME_PROFILES_CLEAN" >&2
   echo "  $AGENT_PRODUCT_SOURCE/ai-marketer-for-expert" >&2
+  echo "  $AGENT_PRODUCT_SOURCE/{marketer,copywriter,designer,tech}" >&2
+  echo "  $HOME/.hermes/profiles/{marketer,copywriter,designer,tech}" >&2
   exit 1
 fi
 
@@ -101,6 +118,14 @@ prune_agent_skills() {
       rm -rf "$skill_dir"
     fi
   done
+}
+
+should_prune_agent_skills() {
+  case "$PRUNE_STUDENT_SKILLS" in
+    0|false|no) return 1 ;;
+    1|true|yes) return 0 ;;
+  esac
+  return 0
 }
 
 patch_designer_image_contract_file() {
@@ -193,6 +218,9 @@ copy_agent() {
   local source_dir="$AGENT_SOURCE_ROOT/$source_name"
   local target_dir="$PAYLOAD_DIR/agents/$target_name"
   local soul_tmp
+  if [[ ! -d "$source_dir" && "$AGENT_SOURCE_MODE" == "hermes-profiles" ]]; then
+    source_dir="$AGENT_SOURCE_ROOT/$target_name"
+  fi
   if [[ ! -d "$source_dir" ]]; then
     echo "Missing agent source: $source_dir" >&2
     exit 1
@@ -201,12 +229,44 @@ copy_agent() {
   /usr/bin/rsync -a \
     --exclude '.DS_Store' \
     --exclude '*.ru.bak' \
+    --exclude '.env' \
+    --exclude '.env.*' \
+    --exclude 'auth.json' \
+    --exclude 'auth.lock' \
     --exclude 'config.yaml' \
     --exclude '__pycache__/' \
+    --exclude 'bin/' \
+    --exclude 'cache/' \
+    --exclude 'context/' \
+    --exclude 'reports/' \
+    --exclude 'logs/' \
+    --exclude 'sessions/' \
+    --exclude 'memories/' \
+    --exclude 'audio_cache/' \
+    --exclude 'image_cache/' \
+    --exclude 'document_cache/' \
+    --exclude 'cron/' \
+    --exclude 'hooks/' \
+    --exclude 'pairing/' \
+    --exclude 'sandboxes/' \
+    --exclude 'tmp/' \
+    --exclude 'state.db' \
+    --exclude 'state.db-shm' \
+    --exclude 'state.db-wal' \
+    --exclude 'gateway.pid' \
+    --exclude 'gateway.lock' \
+    --exclude 'gateway_state.json' \
+    --exclude 'models_dev_cache.json' \
+    --exclude 'context_length_cache.yaml' \
+    --exclude 'channel_directory.json' \
+    --exclude 'processes.json' \
     --exclude '.curator_state' \
     --exclude '.curator_backups' \
     --exclude '.bundled_manifest' \
     --exclude '.usage.json' \
+    --exclude '.usage.json.lock' \
+    --exclude '.hub/' \
+    --exclude 'skills/.hub/' \
     --exclude '.archives/' \
     --exclude 'test-runs/' \
     --exclude 'tests/' \
@@ -214,7 +274,9 @@ copy_agent() {
   while IFS= read -r md_file; do
     /usr/bin/perl -0pi -e 's/\bdo not pretend to be\b/do not present yourself as/gi; s/\bmust not pretend\b/must not claim/gi; s/\bdo not pretend\b/do not claim/gi; s/\bpretending\b/claiming/gi; s/\bpretend\b/claim/gi' "$md_file"
   done < <(/usr/bin/find "$target_dir" -type f -name '*.md')
-  prune_agent_skills "$target_name"
+  if should_prune_agent_skills; then
+    prune_agent_skills "$target_name"
+  fi
   if [[ -f "$target_dir/SOUL.md" ]] && /usr/bin/grep -q "Installed identity guard" "$target_dir/SOUL.md"; then
     # Source SOUL already carries an authored identity guard (e.g. the refactored
     # per-role team-intro guard pulled from the live Hermes profiles). Do NOT
@@ -307,7 +369,7 @@ SOUL
   "$PAYLOAD_DIR/agents/tech/SOUL.md"
 
 # Backward compatibility for the older macOS single-agent installer.
-if [[ -d "$PAYLOAD_DIR/agents/marketer/skills" ]]; then
+if [[ "$AGENT_SOURCE_MODE" != "hermes-profiles" && -d "$PAYLOAD_DIR/agents/marketer/skills" ]]; then
   /usr/bin/rsync -a "$PAYLOAD_DIR/agents/marketer/skills/" "$PAYLOAD_DIR/skills/"
 fi
 
@@ -321,7 +383,7 @@ fi
 cat > "$PAYLOAD_DIR/manifest.json" <<JSON
 {
   "version": "$VERSION",
-  "source": "agent-product",
+  "source": "$AGENT_SOURCE_MODE:$AGENT_PRODUCT_SOURCE",
   "profiles": ["default", "marketer", "copywriter", "designer", "tech"],
   "generatedAt": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 }
