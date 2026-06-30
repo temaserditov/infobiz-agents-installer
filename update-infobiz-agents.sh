@@ -18,6 +18,7 @@ BASE_URL="${BASE_URL:-https://github.com/temaserditov/infobiz-agents-installer/r
 WEB_SHELL_URL="${WEB_SHELL_URL:-$BASE_URL/agent-web-shell-$VERSION.tar.gz}"
 PROFILE_URL="${PROFILE_URL:-$BASE_URL/infobiz-agent-profile-marketer-$VERSION.tar.gz}"
 HERMES_IMAGE_REFERENCE_PATCH_URL="${HERMES_IMAGE_REFERENCE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-image-reference.py}"
+HERMES_TELEGRAM_TEXT_PHOTO_MERGE_PATCH_URL="${HERMES_TELEGRAM_TEXT_PHOTO_MERGE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-telegram-text-photo-merge.py}"
 HERMES_RUNTIME_SAFETY_PATCH_URL="${HERMES_RUNTIME_SAFETY_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-codex-runtime-safety.py}"
 AGENT_RUSSIAN_ONLY_PATCH_URL="${AGENT_RUSSIAN_ONLY_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-agent-russian-only.py}"
 TECH_NO_CODE_PATCH_URL="${TECH_NO_CODE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-tech-no-code-defaults.py}"
@@ -154,6 +155,12 @@ PY
 patch_hermes_image_reference_support() {
   local patcher="${TMPDIR:-/tmp}/patch-hermes-image-reference.py"
   /usr/bin/curl -fsSL "$HERMES_IMAGE_REFERENCE_PATCH_URL" -o "$patcher"
+  "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" "$HERMES_AGENT_ROOT"
+}
+
+patch_telegram_text_photo_merge_support() {
+  local patcher="${TMPDIR:-/tmp}/patch-telegram-text-photo-merge.py"
+  /usr/bin/curl -fsSL "$HERMES_TELEGRAM_TEXT_PHOTO_MERGE_PATCH_URL" -o "$patcher"
   "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" "$HERMES_AGENT_ROOT"
 }
 
@@ -320,6 +327,9 @@ update_agent_profiles >> "$LOG_FILE" 2>&1 || fail "Could not update agent profil
 
 say "Patching Hermes image reference support"
 patch_hermes_image_reference_support >> "$LOG_FILE" 2>&1 || fail "Could not patch Hermes image reference support"
+
+say "Patching Telegram text/photo merge"
+patch_telegram_text_photo_merge_support >> "$LOG_FILE" 2>&1 || fail "Could not patch Telegram text/photo merge support"
 
 say "Patching designer image generation rules"
 patch_markdown_file "$DESIGNER_ROOT/SOUL.md" "SOUL.md" >> "$LOG_FILE" 2>&1

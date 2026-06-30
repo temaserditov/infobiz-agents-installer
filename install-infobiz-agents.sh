@@ -29,6 +29,7 @@ WEB_SHELL_PUBLIC_URL="${WEB_SHELL_PUBLIC_URL:-}"
 HERMES_BRANCH="${HERMES_BRANCH:-main}"
 HERMES_SOURCE_URL="${HERMES_SOURCE_URL:-https://github.com/NousResearch/hermes-agent/archive/refs/heads/$HERMES_BRANCH.tar.gz}"
 HERMES_IMAGE_REFERENCE_PATCH_URL="${HERMES_IMAGE_REFERENCE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-image-reference.py}"
+HERMES_TELEGRAM_TEXT_PHOTO_MERGE_PATCH_URL="${HERMES_TELEGRAM_TEXT_PHOTO_MERGE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-telegram-text-photo-merge.py}"
 HERMES_RUNTIME_SAFETY_PATCH_URL="${HERMES_RUNTIME_SAFETY_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-codex-runtime-safety.py}"
 AGENT_RUSSIAN_ONLY_PATCH_URL="${AGENT_RUSSIAN_ONLY_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-agent-russian-only.py}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.11}"
@@ -464,6 +465,12 @@ patch_official_hermes_setup() {
 patch_hermes_image_reference_support() {
   local patcher="$TMPDIR/patch-hermes-image-reference.py"
   download_file "$HERMES_IMAGE_REFERENCE_PATCH_URL" "$patcher" || return 1
+  "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" "$HERMES_AGENT_ROOT"
+}
+
+patch_telegram_text_photo_merge_support() {
+  local patcher="$TMPDIR/patch-telegram-text-photo-merge.py"
+  download_file "$HERMES_TELEGRAM_TEXT_PHOTO_MERGE_PATCH_URL" "$patcher" || return 1
   "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" "$HERMES_AGENT_ROOT"
 }
 
@@ -1162,6 +1169,7 @@ ensure_uv || fail "Could not install uv"
 install_node_runtime || fail "Could not install Node.js runtime"
 install_hermes_from_source || fail "Official Hermes setup failed"
 patch_hermes_image_reference_support >> "$LOG_FILE" 2>&1 || fail "Could not patch Hermes image reference support"
+patch_telegram_text_photo_merge_support >> "$LOG_FILE" 2>&1 || fail "Could not patch Telegram text/photo merge support"
 
 [[ -x "$HERMES_CMD" ]] || fail "Hermes command not found: $HERMES_CMD"
 

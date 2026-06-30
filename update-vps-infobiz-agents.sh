@@ -14,6 +14,7 @@ BASE_URL="${BASE_URL:-https://github.com/temaserditov/infobiz-agents-installer/r
 WEB_SHELL_URL="${WEB_SHELL_URL:-$BASE_URL/agent-web-shell-$VERSION.tar.gz}"
 PROFILE_URL="${PROFILE_URL:-$BASE_URL/infobiz-agent-profile-marketer-$VERSION.tar.gz}"
 HERMES_IMAGE_REFERENCE_PATCH_URL="${HERMES_IMAGE_REFERENCE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-image-reference.py}"
+HERMES_TELEGRAM_TEXT_PHOTO_MERGE_PATCH_URL="${HERMES_TELEGRAM_TEXT_PHOTO_MERGE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-telegram-text-photo-merge.py}"
 HERMES_RUNTIME_SAFETY_PATCH_URL="${HERMES_RUNTIME_SAFETY_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-codex-runtime-safety.py}"
 AGENT_RUSSIAN_ONLY_PATCH_URL="${AGENT_RUSSIAN_ONLY_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-agent-russian-only.py}"
 TECH_NO_CODE_PATCH_URL="${TECH_NO_CODE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-tech-no-code-defaults.py}"
@@ -137,6 +138,12 @@ PY
 patch_hermes_image_reference_support() {
   local patcher="${TMPDIR:-/tmp}/patch-hermes-image-reference.py"
   curl -fsSL "$HERMES_IMAGE_REFERENCE_PATCH_URL" -o "$patcher"
+  "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" "$HERMES_AGENT_ROOT"
+}
+
+patch_telegram_text_photo_merge_support() {
+  local patcher="${TMPDIR:-/tmp}/patch-telegram-text-photo-merge.py"
+  curl -fsSL "$HERMES_TELEGRAM_TEXT_PHOTO_MERGE_PATCH_URL" -o "$patcher"
   "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" "$HERMES_AGENT_ROOT"
 }
 
@@ -285,6 +292,9 @@ update_agent_profiles
 
 say "Patching Hermes image reference support"
 patch_hermes_image_reference_support
+
+say "Patching Telegram text/photo merge"
+patch_telegram_text_photo_merge_support
 
 say "Patching designer image generation rules"
 patch_markdown_file "$DESIGNER_ROOT/SOUL.md" "SOUL.md"

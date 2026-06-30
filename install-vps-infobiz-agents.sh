@@ -10,6 +10,7 @@ WEB_SHELL_URL="${WEB_SHELL_URL:-$BASE_URL/agent-web-shell-$VERSION.tar.gz}"
 HERMES_BRANCH="${HERMES_BRANCH:-main}"
 HERMES_SOURCE_URL="${HERMES_SOURCE_URL:-https://github.com/NousResearch/hermes-agent/archive/refs/heads/$HERMES_BRANCH.tar.gz}"
 HERMES_IMAGE_REFERENCE_PATCH_URL="${HERMES_IMAGE_REFERENCE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-image-reference.py}"
+HERMES_TELEGRAM_TEXT_PHOTO_MERGE_PATCH_URL="${HERMES_TELEGRAM_TEXT_PHOTO_MERGE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-telegram-text-photo-merge.py}"
 HERMES_RUNTIME_SAFETY_PATCH_URL="${HERMES_RUNTIME_SAFETY_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-codex-runtime-safety.py}"
 AGENT_RUSSIAN_ONLY_PATCH_URL="${AGENT_RUSSIAN_ONLY_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-agent-russian-only.py}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.11}"
@@ -254,6 +255,12 @@ patch_official_hermes_setup() {
 patch_hermes_image_reference_support() {
   local patcher="$TMP_ROOT/patch-hermes-image-reference.py"
   curl -fsSL "$HERMES_IMAGE_REFERENCE_PATCH_URL" -o "$patcher"
+  "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" "$HERMES_AGENT_ROOT"
+}
+
+patch_telegram_text_photo_merge_support() {
+  local patcher="$TMP_ROOT/patch-telegram-text-photo-merge.py"
+  curl -fsSL "$HERMES_TELEGRAM_TEXT_PHOTO_MERGE_PATCH_URL" -o "$patcher"
   "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" "$HERMES_AGENT_ROOT"
 }
 
@@ -763,6 +770,7 @@ main() {
   progress_stage "Установка Hermes официальным установщиком"
   install_hermes_from_source
   patch_hermes_image_reference_support >> "$LOG_FILE" 2>&1
+  patch_telegram_text_photo_merge_support >> "$LOG_FILE" 2>&1
   progress_stage "Создание агентов и установка скиллов"
   install_profiles_and_skills
   patch_agents_russian_only >> "$LOG_FILE" 2>&1 || fail "Could not patch Russian-only agent language"
