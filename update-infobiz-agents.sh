@@ -19,6 +19,7 @@ WEB_SHELL_URL="${WEB_SHELL_URL:-$BASE_URL/agent-web-shell-$VERSION.tar.gz}"
 PROFILE_URL="${PROFILE_URL:-$BASE_URL/infobiz-agent-profile-marketer-$VERSION.tar.gz}"
 HERMES_IMAGE_REFERENCE_PATCH_URL="${HERMES_IMAGE_REFERENCE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-image-reference.py}"
 HERMES_RUNTIME_SAFETY_PATCH_URL="${HERMES_RUNTIME_SAFETY_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-codex-runtime-safety.py}"
+AGENT_RUSSIAN_ONLY_PATCH_URL="${AGENT_RUSSIAN_ONLY_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-agent-russian-only.py}"
 TECH_NO_CODE_PATCH_URL="${TECH_NO_CODE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-tech-no-code-defaults.py}"
 
 say() {
@@ -162,6 +163,14 @@ patch_hermes_codex_runtime_safety() {
   "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" \
     --hermes-root "$HERMES_ROOT" \
     --hermes-agent-root "$HERMES_AGENT_ROOT" \
+    --profiles "marketer,copywriter,designer,tech"
+}
+
+patch_agents_russian_only() {
+  local patcher="${TMPDIR:-/tmp}/patch-agent-russian-only.py"
+  /usr/bin/curl -fsSL "$AGENT_RUSSIAN_ONLY_PATCH_URL" -o "$patcher"
+  "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" \
+    --hermes-root "$HERMES_ROOT" \
     --profiles "marketer,copywriter,designer,tech"
 }
 
@@ -325,6 +334,9 @@ update_web_shell >> "$LOG_FILE" 2>&1 || fail "Could not update WebShell"
 
 say "Configuring GPT-Image 2 High"
 configure_designer_image_generation >> "$LOG_FILE" 2>&1 || fail "Could not configure GPT-Image 2 High for designer"
+
+say "Patching Russian-only language rule"
+patch_agents_russian_only >> "$LOG_FILE" 2>&1 || fail "Could not patch Russian-only agent language"
 
 say "Patching Hermes Codex runtime safety"
 patch_hermes_codex_runtime_safety >> "$LOG_FILE" 2>&1 || fail "Could not patch Hermes Codex runtime safety"

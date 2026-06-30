@@ -299,6 +299,13 @@ If the task clearly belongs to one role, do not present yourself as that role. G
 - OpenClaw is legacy residue. Do not read, run, or use `.openclaw` paths unless the user explicitly asks for OpenClaw migration, audit, cleanup, or recovery.
 SOUL
 
+"$SCRIPT_DIR/patch-agent-russian-only.py" \
+  "$PAYLOAD_DIR/default/SOUL.md" \
+  "$PAYLOAD_DIR/agents/marketer/SOUL.md" \
+  "$PAYLOAD_DIR/agents/copywriter/SOUL.md" \
+  "$PAYLOAD_DIR/agents/designer/SOUL.md" \
+  "$PAYLOAD_DIR/agents/tech/SOUL.md"
+
 # Backward compatibility for the older macOS single-agent installer.
 if [[ -d "$PAYLOAD_DIR/agents/marketer/skills" ]]; then
   /usr/bin/rsync -a "$PAYLOAD_DIR/agents/marketer/skills/" "$PAYLOAD_DIR/skills/"

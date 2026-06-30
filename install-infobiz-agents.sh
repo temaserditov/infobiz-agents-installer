@@ -30,6 +30,7 @@ HERMES_BRANCH="${HERMES_BRANCH:-main}"
 HERMES_SOURCE_URL="${HERMES_SOURCE_URL:-https://github.com/NousResearch/hermes-agent/archive/refs/heads/$HERMES_BRANCH.tar.gz}"
 HERMES_IMAGE_REFERENCE_PATCH_URL="${HERMES_IMAGE_REFERENCE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-image-reference.py}"
 HERMES_RUNTIME_SAFETY_PATCH_URL="${HERMES_RUNTIME_SAFETY_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-codex-runtime-safety.py}"
+AGENT_RUSSIAN_ONLY_PATCH_URL="${AGENT_RUSSIAN_ONLY_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-agent-russian-only.py}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.11}"
 HERMES_EXTRAS="${HERMES_EXTRAS:-cli,mcp}"
 TELEGRAM_PACKAGES=(
@@ -472,6 +473,14 @@ patch_hermes_codex_runtime_safety() {
   "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" \
     --hermes-root "$HERMES_ROOT" \
     --hermes-agent-root "$HERMES_AGENT_ROOT" \
+    --profiles "$AGENT_PROFILES"
+}
+
+patch_agents_russian_only() {
+  local patcher="$TMPDIR/patch-agent-russian-only.py"
+  download_file "$AGENT_RUSSIAN_ONLY_PATCH_URL" "$patcher" || return 1
+  "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" \
+    --hermes-root "$HERMES_ROOT" \
     --profiles "$AGENT_PROFILES"
 }
 
@@ -1162,6 +1171,7 @@ workdir="$(mktemp -d "${TMPDIR:-/tmp}/infobiz-profile.XXXXXX")"
 CLEANUP_WORKDIR="$workdir"
 run_logged "Extracting agent profiles" /usr/bin/tar -xzf "$profile_payload" -C "$workdir" || fail "Could not extract agent profiles"
 install_profiles_and_skills "$profile_payload" "$workdir"
+patch_agents_russian_only >> "$LOG_FILE" 2>&1 || fail "Could not patch Russian-only agent language"
 
 say "OpenAI/Hermes authorization"
 printf "The installer will open the authorization page and copy the code when Hermes prints it.\n"

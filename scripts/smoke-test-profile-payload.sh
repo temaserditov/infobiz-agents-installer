@@ -186,6 +186,35 @@ if errors:
 print("Role identity headers look sane.")
 PY
 
+say "Checking Russian-only language contract"
+python3 - "$PAYLOAD" <<'PY'
+import sys
+from pathlib import Path
+
+payload = Path(sys.argv[1])
+targets = {
+    "default": payload / "default" / "SOUL.md",
+    "marketer": payload / "agents" / "marketer" / "SOUL.md",
+    "copywriter": payload / "agents" / "copywriter" / "SOUL.md",
+    "designer": payload / "agents" / "designer" / "SOUL.md",
+    "tech": payload / "agents" / "tech" / "SOUL.md",
+}
+
+errors = []
+for profile, path in targets.items():
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    if "INFOBIZ_RUSSIAN_ONLY_PATCH_START" not in text:
+        errors.append(f"{profile}: missing Russian-only language patch")
+    if "Always communicate with the user only in Russian" not in text:
+        errors.append(f"{profile}: Russian-only rule text missing")
+
+if errors:
+    print("\n".join(errors))
+    raise SystemExit(1)
+
+print("Russian-only language contract present.")
+PY
+
 say "Checking designer image generation contract"
 python3 - "$PAYLOAD" <<'PY'
 import sys
