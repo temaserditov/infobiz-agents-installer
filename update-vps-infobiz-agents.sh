@@ -14,6 +14,7 @@ BASE_URL="${BASE_URL:-https://github.com/temaserditov/infobiz-agents-installer/r
 WEB_SHELL_URL="${WEB_SHELL_URL:-$BASE_URL/agent-web-shell-$VERSION.tar.gz}"
 PROFILE_URL="${PROFILE_URL:-$BASE_URL/infobiz-agent-profile-marketer-$VERSION.tar.gz}"
 HERMES_IMAGE_REFERENCE_PATCH_URL="${HERMES_IMAGE_REFERENCE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-image-reference.py}"
+HERMES_RUNTIME_SAFETY_PATCH_URL="${HERMES_RUNTIME_SAFETY_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-codex-runtime-safety.py}"
 TECH_NO_CODE_PATCH_URL="${TECH_NO_CODE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-tech-no-code-defaults.py}"
 
 say() {
@@ -136,6 +137,15 @@ patch_hermes_image_reference_support() {
   local patcher="${TMPDIR:-/tmp}/patch-hermes-image-reference.py"
   curl -fsSL "$HERMES_IMAGE_REFERENCE_PATCH_URL" -o "$patcher"
   "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" "$HERMES_AGENT_ROOT"
+}
+
+patch_hermes_codex_runtime_safety() {
+  local patcher="${TMPDIR:-/tmp}/patch-hermes-codex-runtime-safety.py"
+  curl -fsSL "$HERMES_RUNTIME_SAFETY_PATCH_URL" -o "$patcher"
+  "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" \
+    --hermes-root "$HERMES_ROOT" \
+    --hermes-agent-root "$HERMES_AGENT_ROOT" \
+    --profiles "marketer,copywriter,designer,tech"
 }
 
 patch_tech_no_code_defaults() {
@@ -280,6 +290,9 @@ update_web_shell
 
 say "Configuring GPT-Image 2 High"
 configure_designer_image_generation
+
+say "Patching Hermes Codex runtime safety"
+patch_hermes_codex_runtime_safety
 
 say "Restarting gateways"
 if command -v systemctl >/dev/null 2>&1; then

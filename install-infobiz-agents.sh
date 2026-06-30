@@ -29,6 +29,7 @@ WEB_SHELL_PUBLIC_URL="${WEB_SHELL_PUBLIC_URL:-}"
 HERMES_BRANCH="${HERMES_BRANCH:-main}"
 HERMES_SOURCE_URL="${HERMES_SOURCE_URL:-https://github.com/NousResearch/hermes-agent/archive/refs/heads/$HERMES_BRANCH.tar.gz}"
 HERMES_IMAGE_REFERENCE_PATCH_URL="${HERMES_IMAGE_REFERENCE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-image-reference.py}"
+HERMES_RUNTIME_SAFETY_PATCH_URL="${HERMES_RUNTIME_SAFETY_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-codex-runtime-safety.py}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.11}"
 HERMES_EXTRAS="${HERMES_EXTRAS:-cli,mcp}"
 TELEGRAM_PACKAGES=(
@@ -465,6 +466,15 @@ patch_hermes_image_reference_support() {
   "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" "$HERMES_AGENT_ROOT"
 }
 
+patch_hermes_codex_runtime_safety() {
+  local patcher="$TMPDIR/patch-hermes-codex-runtime-safety.py"
+  download_file "$HERMES_RUNTIME_SAFETY_PATCH_URL" "$patcher" || return 1
+  "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" \
+    --hermes-root "$HERMES_ROOT" \
+    --hermes-agent-root "$HERMES_AGENT_ROOT" \
+    --profiles "$AGENT_PROFILES"
+}
+
 install_hermes_from_source() {
   local source_tarball="$TMPDIR/hermes-agent-source.tar.gz"
   download_file "$HERMES_SOURCE_URL" "$source_tarball"
@@ -646,8 +656,47 @@ def write_config_model(path: Path, model: str) -> None:
             data["model"] = model_cfg
         model_cfg["provider"] = "openai-codex"
         model_cfg["default"] = model
-        model_cfg.setdefault("base_url", "https://chatgpt.com/backend-api/codex")
+        model_cfg["base_url"] = ""
         model_cfg.setdefault("context_length", 100000)
+        model_cfg["openai_runtime"] = "codex_app_server"
+        model_cfg["api_mode"] = "codex_app_server"
+        compression = data.setdefault("compression", {})
+        if not isinstance(compression, dict):
+            compression = {}
+            data["compression"] = compression
+        compression["enabled"] = False
+        memory = data.setdefault("memory", {})
+        if not isinstance(memory, dict):
+            memory = {}
+            data["memory"] = memory
+        memory["nudge_interval"] = 0
+        memory["flush_min_turns"] = 0
+        skills = data.setdefault("skills", {})
+        if not isinstance(skills, dict):
+            skills = {}
+            data["skills"] = skills
+        skills["creation_nudge_interval"] = 0
+        auxiliary = data.setdefault("auxiliary", {})
+        if not isinstance(auxiliary, dict):
+            auxiliary = {}
+            data["auxiliary"] = auxiliary
+        title_generation = auxiliary.setdefault("title_generation", {})
+        if not isinstance(title_generation, dict):
+            title_generation = {}
+            auxiliary["title_generation"] = title_generation
+        title_generation["enabled"] = False
+        title_generation["provider"] = ""
+        title_generation["model"] = ""
+        title_generation["base_url"] = ""
+        title_generation["api_key"] = ""
+        aux_compression = auxiliary.setdefault("compression", {})
+        if not isinstance(aux_compression, dict):
+            aux_compression = {}
+            auxiliary["compression"] = aux_compression
+        aux_compression["provider"] = ""
+        aux_compression["model"] = ""
+        aux_compression["base_url"] = ""
+        aux_compression["api_key"] = ""
         path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
         return
     text = path.read_text(encoding="utf-8", errors="ignore") if path.exists() else ""
@@ -1118,6 +1167,7 @@ say "OpenAI/Hermes authorization"
 printf "The installer will open the authorization page and copy the code when Hermes prints it.\n"
 run_hermes_auth || fail "OpenAI/Hermes authorization failed"
 apply_best_available_model || fail "Could not select an available OpenAI model"
+patch_hermes_codex_runtime_safety >> "$LOG_FILE" 2>&1 || fail "Could not patch Hermes Codex runtime safety"
 
 say "Installing Hermes gateway services"
 run_hermes gateway install --force >> "$LOG_FILE" 2>&1 || true

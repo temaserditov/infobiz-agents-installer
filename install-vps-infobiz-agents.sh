@@ -10,6 +10,7 @@ WEB_SHELL_URL="${WEB_SHELL_URL:-$BASE_URL/agent-web-shell-$VERSION.tar.gz}"
 HERMES_BRANCH="${HERMES_BRANCH:-main}"
 HERMES_SOURCE_URL="${HERMES_SOURCE_URL:-https://github.com/NousResearch/hermes-agent/archive/refs/heads/$HERMES_BRANCH.tar.gz}"
 HERMES_IMAGE_REFERENCE_PATCH_URL="${HERMES_IMAGE_REFERENCE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-image-reference.py}"
+HERMES_RUNTIME_SAFETY_PATCH_URL="${HERMES_RUNTIME_SAFETY_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-codex-runtime-safety.py}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.11}"
 HERMES_EXTRAS="${HERMES_EXTRAS:-cli,mcp}"
 NODE_VERSION="${NODE_VERSION:-22}"
@@ -255,6 +256,15 @@ patch_hermes_image_reference_support() {
   "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" "$HERMES_AGENT_ROOT"
 }
 
+patch_hermes_codex_runtime_safety() {
+  local patcher="$TMP_ROOT/patch-hermes-codex-runtime-safety.py"
+  curl -fsSL "$HERMES_RUNTIME_SAFETY_PATCH_URL" -o "$patcher"
+  "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" \
+    --hermes-root "$HERMES_ROOT" \
+    --hermes-agent-root "$HERMES_AGENT_ROOT" \
+    --profiles "$AGENT_PROFILES"
+}
+
 install_hermes_from_source() {
   local source_tarball="$TMP_ROOT/hermes-agent-source.tar.gz"
   download_file "$HERMES_SOURCE_URL" "$source_tarball"
@@ -373,8 +383,47 @@ def write_config_model(path, model):
             data["model"] = model_cfg
         model_cfg["provider"] = "openai-codex"
         model_cfg["default"] = model
-        model_cfg.setdefault("base_url", "https://chatgpt.com/backend-api/codex")
+        model_cfg["base_url"] = ""
         model_cfg.setdefault("context_length", 100000)
+        model_cfg["openai_runtime"] = "codex_app_server"
+        model_cfg["api_mode"] = "codex_app_server"
+        compression = data.setdefault("compression", {})
+        if not isinstance(compression, dict):
+            compression = {}
+            data["compression"] = compression
+        compression["enabled"] = False
+        memory = data.setdefault("memory", {})
+        if not isinstance(memory, dict):
+            memory = {}
+            data["memory"] = memory
+        memory["nudge_interval"] = 0
+        memory["flush_min_turns"] = 0
+        skills = data.setdefault("skills", {})
+        if not isinstance(skills, dict):
+            skills = {}
+            data["skills"] = skills
+        skills["creation_nudge_interval"] = 0
+        auxiliary = data.setdefault("auxiliary", {})
+        if not isinstance(auxiliary, dict):
+            auxiliary = {}
+            data["auxiliary"] = auxiliary
+        title_generation = auxiliary.setdefault("title_generation", {})
+        if not isinstance(title_generation, dict):
+            title_generation = {}
+            auxiliary["title_generation"] = title_generation
+        title_generation["enabled"] = False
+        title_generation["provider"] = ""
+        title_generation["model"] = ""
+        title_generation["base_url"] = ""
+        title_generation["api_key"] = ""
+        aux_compression = auxiliary.setdefault("compression", {})
+        if not isinstance(aux_compression, dict):
+            aux_compression = {}
+            auxiliary["compression"] = aux_compression
+        aux_compression["provider"] = ""
+        aux_compression["model"] = ""
+        aux_compression["base_url"] = ""
+        aux_compression["api_key"] = ""
         path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
         return
     text = path.read_text(encoding="utf-8", errors="ignore") if path.exists() else ""
@@ -709,6 +758,7 @@ main() {
   install_profiles_and_skills
   run_openai_auth
   apply_best_available_model
+  patch_hermes_codex_runtime_safety >> "$LOG_FILE" 2>&1 || fail "Could not patch Hermes Codex runtime safety"
   progress_stage "Установка WebShell"
   install_web_shell
   progress_stage "Запуск панели агентов"
