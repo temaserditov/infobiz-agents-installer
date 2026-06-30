@@ -1060,11 +1060,15 @@ async function saveTelegramSettings() {
     const fresh = await api("/api/telegram");
     state.telegramSettings = fresh;
     const results = data.results || [];
-    const restarted = results.filter((item) => item.restart?.restarted).length;
-    const failed = results.filter((item) => item.restart && !item.restart.restarted);
+    const restarted = results.filter(restartSucceeded).length;
+    const skipped = restartSkippedNames(results);
+    const failed = restartFailedNames(results);
     if (failed.length) {
       els.telegramStatus.className = "settings-status error";
-      els.telegramStatus.textContent = `Настройки сохранены, но Telegram не перезапустился: ${failed.map((item) => item.name || item.profile).join(", ")}`;
+      els.telegramStatus.textContent = `Настройки сохранены, но Telegram не перезапустился: ${failed.join(", ")}`;
+    } else if (skipped.length) {
+      els.telegramStatus.className = "settings-status";
+      els.telegramStatus.textContent = `Настройки сохранены. Gateway занятого агента не трогал: ${skipped.join(", ")}`;
     } else {
       renderTelegramSettings(results.length ? `Сохранено и перезапущено: ${restarted} из ${results.length}` : "Изменений нет");
     }
@@ -1093,11 +1097,15 @@ async function saveModelSettings() {
     const fresh = await api("/api/models");
     state.modelSettings = fresh;
     const results = data.results || [];
-    const restarted = results.filter((item) => item.restart?.restarted).length;
-    const failed = results.filter((item) => item.restart && !item.restart.restarted);
+    const restarted = results.filter(restartSucceeded).length;
+    const skipped = restartSkippedNames(results);
+    const failed = restartFailedNames(results);
     if (failed.length) {
       els.modelStatus.className = "settings-status error";
-      els.modelStatus.textContent = `Модель сохранена, но gateway не перезапустился: ${failed.map((item) => item.name || item.profile).join(", ")}`;
+      els.modelStatus.textContent = `Модель сохранена, но gateway не перезапустился: ${failed.join(", ")}`;
+    } else if (skipped.length) {
+      els.modelStatus.className = "settings-status";
+      els.modelStatus.textContent = `Модель сохранена. Gateway занятого агента не трогал: ${skipped.join(", ")}`;
     } else {
       renderModelSettings(results.length ? `Сохранено и перезапущено: ${restarted} из ${results.length}` : "Изменений нет");
     }
@@ -1110,13 +1118,47 @@ async function saveModelSettings() {
   }
 }
 
+function restartPayload(item) {
+  return item?.restart || item || {};
+}
+
+function restartSucceeded(item) {
+  return Boolean(restartPayload(item).restarted);
+}
+
+function restartSkipped(item) {
+  return Boolean(restartPayload(item).skipped);
+}
+
+function restartSkippedNames(items) {
+  return items.filter(restartSkipped).map((item) => item.name || item.profile || item.agent?.name || item.agent?.id).filter(Boolean);
+}
+
+function restartFailedNames(items) {
+  return items
+    .filter((item) => {
+      const restart = restartPayload(item);
+      const hasRestart = Boolean(item?.restart)
+        || Object.prototype.hasOwnProperty.call(item || {}, "restarted")
+        || Object.prototype.hasOwnProperty.call(item || {}, "skipped");
+      return hasRestart && !restart.restarted && !restart.skipped;
+    })
+    .map((item) => item.name || item.profile || item.agent?.name || item.agent?.id)
+    .filter(Boolean);
+}
+
 async function restartGateway(agentId) {
   const agent = state.agents.find((item) => item.id === agentId);
   state.controlMessage = `Перезапускаю ${agent?.name || agentId}…`;
   renderControlPanel();
-  const result = await api(`/api/agents/${agentId}/restart-gateway`, { method: "POST", body: "{}" });
-  const ok = result.restart?.restarted || result.restarted;
-  await loadControlPanel(ok ? `${agent?.name || agentId}: gateway перезапущен` : `${agent?.name || agentId}: не удалось перезапустить gateway`);
+  const result = await api(`/api/agents/${agentId}/restart-gateway`, { method: "POST", body: JSON.stringify({ force: false }) });
+  const restart = restartPayload(result);
+  const name = agent?.name || agentId;
+  await loadControlPanel(restart.restarted
+    ? `${name}: gateway перезапущен`
+    : restart.skipped
+      ? `${name}: gateway не трогал, агент сейчас отвечает`
+      : `${name}: не удалось перезапустить gateway`);
 }
 
 async function restartAllGateways() {
@@ -1128,14 +1170,19 @@ async function restartAllGateways() {
     const results = [];
     for (const agent of agents) {
       try {
-        const result = await api(`/api/agents/${agent.id}/restart-gateway`, { method: "POST", body: "{}" });
-        results.push({ agent, ok: result.restart?.restarted || result.restarted });
+        const result = await api(`/api/agents/${agent.id}/restart-gateway`, { method: "POST", body: JSON.stringify({ force: false }) });
+        results.push({ agent, restart: restartPayload(result) });
       } catch {
-        results.push({ agent, ok: false });
+        results.push({ agent, restart: { restarted: false, skipped: false } });
       }
     }
-    const okCount = results.filter((item) => item.ok).length;
-    await loadControlPanel(`Перезапущено: ${okCount} из ${results.length}`);
+    const okCount = results.filter(restartSucceeded).length;
+    const skippedCount = results.filter(restartSkipped).length;
+    const failedCount = results.length - okCount - skippedCount;
+    const parts = [`Перезапущено: ${okCount} из ${results.length}`];
+    if (skippedCount) parts.push(`занятых не трогал: ${skippedCount}`);
+    if (failedCount) parts.push(`ошибок: ${failedCount}`);
+    await loadControlPanel(parts.join(". "));
   } finally {
     els.restartAllGateways.disabled = false;
   }
@@ -1341,10 +1388,19 @@ async function saveVoiceModal() {
     const agent = state.agents.find((item) => item.id === agentId);
     closeVoiceModal();
     const results = data.results || (data.profile ? [data] : []);
-    const failed = results.filter((item) => item.restart && !item.restart.restarted);
+    const skipped = restartSkippedNames(results);
+    const failed = restartFailedNames(results);
     await loadControlPanel(applyAll
-      ? (failed.length ? `Голос сохранен, но gateway не перезапустился: ${failed.map((item) => item.name || item.profile).join(", ")}` : "Голосовой движок обновлен для всех агентов")
-      : (failed.length ? `${agent?.name || agentId}: голос сохранен, но gateway не перезапустился` : `${agent?.name || agentId}: голосовой движок обновлен`));
+      ? (failed.length
+        ? `Голос сохранен, но gateway не перезапустился: ${failed.join(", ")}`
+        : skipped.length
+          ? `Голос сохранен. Gateway занятого агента не трогал: ${skipped.join(", ")}`
+          : "Голосовой движок обновлен для всех агентов")
+      : (failed.length
+        ? `${agent?.name || agentId}: голос сохранен, но gateway не перезапустился`
+        : skipped.length
+          ? `${agent?.name || agentId}: голос сохранен, gateway сейчас занят`
+          : `${agent?.name || agentId}: голосовой движок обновлен`));
     await refreshSidebar();
   } catch (error) {
     els.voiceModalError.hidden = false;
@@ -1373,7 +1429,9 @@ async function saveModelModal() {
     const result = (data.results || []).find((item) => item.profile === agentId);
     const agent = state.agents.find((item) => item.id === agentId);
     closeModelModal();
-    await loadControlPanel(result?.restart && !result.restart.restarted
+    await loadControlPanel(result?.restart?.skipped
+      ? `${agent?.name || agentId}: модель сохранена, gateway сейчас занят`
+      : result?.restart && !result.restart.restarted
       ? `${agent?.name || agentId}: модель сохранена, но gateway не перезапустился`
       : `${agent?.name || agentId}: модель обновлена`);
     await refreshSidebar();

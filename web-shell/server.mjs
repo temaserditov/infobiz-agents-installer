@@ -50,6 +50,7 @@ const PROFILE_ORDER = PROFILE_ALLOW.size
   : ALL_PROFILE_ORDER;
 const BLOAT_TOKEN_LIMIT = 20_000;
 const LONG_RUN_MS = 120_000;
+const ACTIVE_GATEWAY_TURN_MS = Number(process.env.INFOBIZ_ACTIVE_GATEWAY_TURN_MS || 5 * 60 * 1000);
 const FORBIDDEN_PATTERNS = [
   join(HOME_DIR, ".openclaw"),
   "agent-browser-darwin",
@@ -2124,6 +2125,83 @@ function activeRunsFor(agentId) {
     }));
 }
 
+function parseGatewayLogTime(line) {
+  const match = String(line || "").match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:[,.]\d+)?/);
+  if (!match) return 0;
+  const time = Date.parse(`${match[1]}T${match[2]}`);
+  return Number.isFinite(time) ? time : 0;
+}
+
+function latestGatewayTurnEvents(agentId) {
+  const logPath = join(profileDir(agentId), "logs", "gateway.log");
+  const lines = tailLines(logPath, 700).split(/\r?\n/).filter(Boolean);
+  const busyPattern = /(inbound message|flushing (?:text|photo) batch|image routing|cached .*photo|routed telegram photo|image_generate|generating image|sending generated image|MEDIA:)/i;
+  const donePattern = /(response ready|telegram response sent|sent .*message|sent .*photo|gateway running|received SIGTERM|shutdown complete|disconnected from telegram)/i;
+  let lastBusy = null;
+  let lastDone = null;
+  for (const line of lines) {
+    const ts = parseGatewayLogTime(line);
+    if (!ts) continue;
+    if (busyPattern.test(line)) lastBusy = { ts, line: redactSensitiveText(line).slice(0, 260) };
+    if (donePattern.test(line)) lastDone = { ts, line: redactSensitiveText(line).slice(0, 260) };
+  }
+  return { logPath, lastBusy, lastDone };
+}
+
+function gatewayStateActivity(agentId) {
+  const statePath = join(profileDir(agentId), "gateway_state.json");
+  const state = readJson(statePath, null);
+  if (!state || typeof state !== "object") return null;
+  const activeAgents = Number(state.active_agents ?? state.activeAgents ?? state.active ?? 0);
+  const updatedRaw = state.updated_at || state.updatedAt || state.timestamp || "";
+  const updatedAt = updatedRaw ? Date.parse(updatedRaw) : 0;
+  const fresh = !updatedAt || Date.now() - updatedAt < ACTIVE_GATEWAY_TURN_MS * 2;
+  if (activeAgents > 0 && fresh) {
+    return {
+      source: "gateway_state",
+      activeAgents,
+      updatedAt: updatedAt ? new Date(updatedAt).toISOString() : "",
+    };
+  }
+  return null;
+}
+
+function gatewayRestartGuard(agentId) {
+  const activeRuns = activeRunsFor(agentId);
+  if (activeRuns.length) {
+    return {
+      blocked: true,
+      reason: "active-web-run",
+      message: "Агент сейчас отвечает в WebShell. Перезапуск пропущен.",
+      activeRuns,
+    };
+  }
+
+  const stateActivity = gatewayStateActivity(agentId);
+  if (stateActivity) {
+    return {
+      blocked: true,
+      reason: "active-gateway-turn",
+      message: "Агент сейчас обрабатывает задачу. Перезапуск пропущен.",
+      state: stateActivity,
+    };
+  }
+
+  const events = latestGatewayTurnEvents(agentId);
+  const { lastBusy, lastDone } = events;
+  const busyIsOpen = lastBusy && (!lastDone || lastBusy.ts > lastDone.ts);
+  if (busyIsOpen && Date.now() - lastBusy.ts < ACTIVE_GATEWAY_TURN_MS) {
+    return {
+      blocked: true,
+      reason: "recent-telegram-turn",
+      message: "Агент недавно получил Telegram-задачу и еще не закончил ответ. Перезапуск пропущен.",
+      events,
+    };
+  }
+
+  return { blocked: false, events };
+}
+
 function agentDiagnostics(agentId) {
   const dir = profileDir(agentId);
   if (!existsSync(dir)) throw new Error(`profile not found: ${agentId}`);
@@ -2149,6 +2227,7 @@ function agentDiagnostics(agentId) {
     skills: skillsSummary(agentId),
     logs: { path: logs.path, problemCount: logs.problemCount, problems: logs.problems },
     activeRuns: runsForAgent,
+    restartGuard: gatewayRestartGuard(agentId),
     forbiddenProcesses: forbidden,
     issues,
     health: issues.length ? "attention" : "ok",
@@ -2357,24 +2436,37 @@ function resetAgentSessions(agentId) {
   return { ...result, restarted: true };
 }
 
-function restartAgentGateway(agentId) {
+function restartAgentGateway(agentId, options = {}) {
   const dir = profileDir(agentId);
   if (!existsSync(dir)) throw new Error(`profile not found: ${agentId}`);
+  const force = Boolean(options.force);
+  const guard = force ? { blocked: false, forced: true } : gatewayRestartGuard(agentId);
+  const label = gatewayLabel(agentId);
+  if (guard.blocked) {
+    return {
+      ok: true,
+      restarted: false,
+      skipped: true,
+      label,
+      reason: guard.reason,
+      message: guard.message,
+      guard,
+    };
+  }
   const errors = [];
   if (process.platform === "linux") {
     const service = systemdGatewayService(agentId);
     const restart = runCommand("systemctl", ["restart", service]);
-    if (restart.code === 0) return { ok: true, restarted: true, method: "systemd", label: service };
+    if (restart.code === 0) return { ok: true, restarted: true, method: "systemd", label: service, guard };
     errors.push(`systemctl ${service}: ${restart.stderr || restart.stdout || `exit ${restart.code}`}`);
   }
 
-  const label = gatewayLabel(agentId);
   if (process.platform === "darwin") {
     const uid = String(process.getuid?.() || 501);
     const target = `gui/${uid}/${label}`;
     const plist = join(LAUNCH_AGENTS_DIR, `${label}.plist`);
     const kick = runCommand("launchctl", ["kickstart", "-k", target]);
-    if (kick.code === 0) return { ok: true, restarted: true, method: "launchctl-kickstart", label };
+    if (kick.code === 0) return { ok: true, restarted: true, method: "launchctl-kickstart", label, guard };
     errors.push(`launchctl kickstart ${label}: ${kick.stderr || kick.stdout || `exit ${kick.code}`}`);
 
     runCommand("launchctl", ["bootout", target]);
@@ -2385,7 +2477,7 @@ function restartAgentGateway(agentId) {
       errors.push(`launch plist not found: ${plist}`);
     }
     const secondKick = runCommand("launchctl", ["kickstart", "-k", target]);
-    if (secondKick.code === 0) return { ok: true, restarted: true, method: "launchctl-bootstrap", label };
+    if (secondKick.code === 0) return { ok: true, restarted: true, method: "launchctl-bootstrap", label, guard };
     errors.push(`launchctl second kickstart ${label}: ${secondKick.stderr || secondKick.stdout || `exit ${secondKick.code}`}`);
   }
 
@@ -2405,7 +2497,7 @@ function restartAgentGateway(agentId) {
   const install = runCommand(command, [...commandPrefix, "gateway", "install", "--force"], { env, cwd: HERMES_AGENT_ROOT });
   if (install.code !== 0) errors.push(`hermes gateway install ${label}: ${install.stderr || install.stdout || `exit ${install.code}`}`);
   const start = runCommand(command, [...commandPrefix, "gateway", "start"], { env, cwd: HERMES_AGENT_ROOT });
-  if (start.code === 0) return { ok: true, restarted: true, method: "hermes-gateway-start", label };
+  if (start.code === 0) return { ok: true, restarted: true, method: "hermes-gateway-start", label, guard };
   errors.push(`hermes gateway start ${label}: ${start.stderr || start.stdout || `exit ${start.code}`}`);
   return { ok: false, restarted: false, label, error: errors.join("\n").slice(0, 2000) };
 }
@@ -4244,7 +4336,8 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: "invalid agent id" });
         return;
       }
-      const restart = restartAgentGateway(id);
+      const body = await readBody(req);
+      const restart = restartAgentGateway(id, { force: Boolean(body.force) });
       sendJson(res, 200, { ok: restart.ok, restarted: restart.restarted, restart, diagnostics: agentDiagnostics(id) });
       return;
     }
