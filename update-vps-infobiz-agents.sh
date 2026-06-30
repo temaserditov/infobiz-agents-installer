@@ -296,6 +296,7 @@ patch_hermes_codex_runtime_safety
 
 say "Restarting gateways"
 if command -v systemctl >/dev/null 2>&1; then
+  systemctl restart infobiz-hermes-gateway.service >/dev/null 2>&1 || true
   systemctl restart infobiz-hermes-gateway-marketer.service >/dev/null 2>&1 || true
   systemctl restart infobiz-hermes-gateway-copywriter.service >/dev/null 2>&1 || true
   systemctl restart infobiz-hermes-gateway-designer.service >/dev/null 2>&1 || true

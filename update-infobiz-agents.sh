@@ -331,6 +331,7 @@ patch_hermes_codex_runtime_safety >> "$LOG_FILE" 2>&1 || fail "Could not patch H
 
 say "Restarting gateways"
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
+restart_launch_agent "ai.hermes.gateway" "$LAUNCH_AGENTS/ai.hermes.gateway.plist"
 restart_launch_agent "ai.hermes.gateway-marketer" "$LAUNCH_AGENTS/ai.hermes.gateway-marketer.plist"
 restart_launch_agent "ai.hermes.gateway-copywriter" "$LAUNCH_AGENTS/ai.hermes.gateway-copywriter.plist"
 restart_launch_agent "ai.hermes.gateway-designer" "$LAUNCH_AGENTS/ai.hermes.gateway-designer.plist"
