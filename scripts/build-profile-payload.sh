@@ -159,7 +159,10 @@ This section is an installer patch. It has priority for image-generation request
 - Do not generate a background and then overlay text/elements manually with code.
 - If text, labels, badges, arrows, UI fragments, or other elements must appear in the image, include them in the GPT-Image 2 prompt itself.
 - Local code may only help with file handling: downloading, saving, converting, or sending the generated image. It must not draw, compose, typeset, or decorate the requested image.
-- In Telegram, send the generated result as a native image when possible: image URL or `MEDIA:/absolute/path`.
+- In Telegram, send the generated result as a native image, not as a textual link.
+- After the image tool returns a local generated file, include a standalone line exactly in this format: `MEDIA:/absolute/path/to/generated-image.png`.
+- Do not wrap `MEDIA:` in prose, Markdown links, bullets, or code fences. The `MEDIA:` line must be alone so Telegram uploads the image as a photo.
+- If the image tool returns only a remote image URL, include it as a Markdown image (`![result](https://...)`), not as a plain clickable link.
 
 Image-task trigger contract:
 
