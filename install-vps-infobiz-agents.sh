@@ -7,19 +7,24 @@ VERSION="${VERSION:-0.1.0}"
 BASE_URL="${BASE_URL:-https://github.com/temaserditov/infobiz-agents-installer/releases/download/v${VERSION}}"
 PROFILE_URL="${PROFILE_URL:-$BASE_URL/infobiz-agent-profile-marketer-$VERSION.tar.gz}"
 WEB_SHELL_URL="${WEB_SHELL_URL:-$BASE_URL/agent-web-shell-$VERSION.tar.gz}"
-HERMES_BRANCH="${HERMES_BRANCH:-main}"
-HERMES_SOURCE_URL="${HERMES_SOURCE_URL:-https://github.com/NousResearch/hermes-agent/archive/refs/heads/$HERMES_BRANCH.tar.gz}"
+HERMES_BRANCH="${HERMES_BRANCH:-}"
+HERMES_SOURCE_URL="${HERMES_SOURCE_URL:-}"
+HERMES_RELEASE_API="${HERMES_RELEASE_API:-https://api.github.com/repos/NousResearch/hermes-agent/releases/latest}"
+HERMES_FALLBACK_TAG="${HERMES_FALLBACK_TAG:-v2026.7.7.2}"
+HERMES_SOURCE_REF=""
 HERMES_IMAGE_REFERENCE_PATCH_URL="${HERMES_IMAGE_REFERENCE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-image-reference.py}"
 HERMES_TELEGRAM_TEXT_PHOTO_MERGE_PATCH_URL="${HERMES_TELEGRAM_TEXT_PHOTO_MERGE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-telegram-text-photo-merge.py}"
 HERMES_LOCAL_MEDIA_MARKDOWN_PATCH_URL="${HERMES_LOCAL_MEDIA_MARKDOWN_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-local-media-markdown.py}"
 HERMES_RUNTIME_SAFETY_PATCH_URL="${HERMES_RUNTIME_SAFETY_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-codex-runtime-safety.py}"
 AGENT_RUSSIAN_ONLY_PATCH_URL="${AGENT_RUSSIAN_ONLY_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-agent-russian-only.py}"
+UPDATE_SCRIPT_URL="${UPDATE_SCRIPT_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/update-vps-infobiz-agents.sh}"
+FORCE_REINSTALL="${FORCE_REINSTALL:-0}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.11}"
-HERMES_EXTRAS="${HERMES_EXTRAS:-cli,mcp}"
 NODE_VERSION="${NODE_VERSION:-22}"
 WEB_SHELL_PORT="${WEB_SHELL_PORT:-8787}"
 WEB_SHELL_HOST="${WEB_SHELL_HOST:-0.0.0.0}"
 PUBLIC_HOST="${PUBLIC_HOST:-}"
+WEB_SHELL_PUBLIC_URL="${WEB_SHELL_PUBLIC_URL:-}"
 WEB_SHELL_ACCESS_TOKEN="${WEB_SHELL_ACCESS_TOKEN:-}"
 STUDENT_UI="${STUDENT_UI:-1}"
 
@@ -31,8 +36,13 @@ LOG_FILE="$INSTALL_ROOT/install.log"
 HERMES_CMD="$HERMES_AGENT_ROOT/venv/bin/hermes"
 UV_CMD=""
 TMP_ROOT="${TMPDIR:-/tmp}/infobiz-vps-install.$$"
+UV_INSTALLED_MARKER="$INSTALL_ROOT/.uv-installed-by-infobiz"
+NODE_INSTALLED_MARKER="$INSTALL_ROOT/.node-installed-by-infobiz"
 PROGRESS_STEP=0
 PROGRESS_TOTAL=11
+PREVIOUS_HERMES_BACKUP=""
+PREVIOUS_WEB_SHELL_BACKUP=""
+INSTALL_COMPLETED=0
 
 export DEBIAN_FRONTEND=noninteractive
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HERMES_ROOT/node/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
@@ -78,7 +88,28 @@ fail() {
 }
 
 cleanup() {
+  local exit_code=$?
+  trap - EXIT
   rm -rf "$TMP_ROOT"
+  if [[ "$exit_code" != "0" && "$INSTALL_COMPLETED" != "1" \
+    && -n "$PREVIOUS_HERMES_BACKUP" && -d "$PREVIOUS_HERMES_BACKUP" ]]; then
+    rm -rf "$HERMES_ROOT"
+    if mv "$PREVIOUS_HERMES_BACKUP" "$HERMES_ROOT"; then
+      printf "Restored previous Hermes after failed install.\n" >> "$LOG_FILE"
+    else
+      printf "WARNING: could not restore previous Hermes from %s\n" "$PREVIOUS_HERMES_BACKUP" >> "$LOG_FILE"
+    fi
+  fi
+  if [[ "$exit_code" != "0" && "$INSTALL_COMPLETED" != "1" \
+    && -n "$PREVIOUS_WEB_SHELL_BACKUP" && -d "$PREVIOUS_WEB_SHELL_BACKUP" ]]; then
+    rm -rf "$WEB_SHELL_ROOT"
+    if mv "$PREVIOUS_WEB_SHELL_BACKUP" "$WEB_SHELL_ROOT"; then
+      printf "Restored previous WebShell after failed install.\n" >> "$LOG_FILE"
+    else
+      printf "WARNING: could not restore previous WebShell from %s\n" "$PREVIOUS_WEB_SHELL_BACKUP" >> "$LOG_FILE"
+    fi
+  fi
+  exit "$exit_code"
 }
 trap cleanup EXIT
 
@@ -199,6 +230,7 @@ ensure_uv() {
   else
     fail "uv was not installed"
   fi
+  printf "%s\n" "$UV_CMD" > "$UV_INSTALLED_MARKER"
 }
 
 install_node_runtime() {
@@ -230,6 +262,7 @@ install_node_runtime() {
   ln -sf "$HERMES_ROOT/node/bin/node" "$HOME/.local/bin/node"
   ln -sf "$HERMES_ROOT/node/bin/npm" "$HOME/.local/bin/npm"
   ln -sf "$HERMES_ROOT/node/bin/npx" "$HOME/.local/bin/npx"
+  : > "$NODE_INSTALLED_MARKER"
   export PATH="$HERMES_ROOT/node/bin:$PATH"
 }
 
@@ -237,9 +270,8 @@ patch_official_hermes_setup() {
   local setup_path="$HERMES_AGENT_ROOT/setup-hermes.sh"
   local tmp_path="$setup_path.infobiz"
   [[ -f "$setup_path" ]] || return 1
-  awk -v extras="$HERMES_EXTRAS" '
+  awk '
     {
-      gsub(/\.\[all\]/, ".[" extras "]");
       if (index($0, "read -p") && index($0, "Install ripgrep for faster search")) {
         sub(/read -p.*/, "REPLY=n");
       }
@@ -248,9 +280,33 @@ patch_official_hermes_setup() {
       }
       print;
     }
-  ' "$setup_path" > "$tmp_path"
-  mv "$tmp_path" "$setup_path"
-  chmod +x "$setup_path"
+  ' "$setup_path" > "$tmp_path" || return 1
+  mv "$tmp_path" "$setup_path" || return 1
+  chmod +x "$setup_path" || return 1
+}
+
+resolve_hermes_source() {
+  if [[ -n "$HERMES_SOURCE_URL" ]]; then
+    HERMES_SOURCE_REF="custom"
+    return 0
+  fi
+  if [[ -n "$HERMES_BRANCH" ]]; then
+    HERMES_SOURCE_URL="https://github.com/NousResearch/hermes-agent/archive/refs/heads/$HERMES_BRANCH.tar.gz"
+    HERMES_SOURCE_REF="branch:$HERMES_BRANCH"
+    return 0
+  fi
+
+  local metadata tag tarball
+  metadata="$(curl -fsSL --max-time 20 "$HERMES_RELEASE_API" 2>> "$LOG_FILE" || true)"
+  tag="$(printf "%s" "$metadata" | sed -nE 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p' | head -1)"
+  tarball="$(printf "%s" "$metadata" | sed -nE 's/.*"tarball_url"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p' | head -1)"
+  if [[ -n "$tarball" ]]; then
+    HERMES_SOURCE_URL="$tarball"
+    HERMES_SOURCE_REF="release:${tag:-latest}"
+  else
+    HERMES_SOURCE_URL="https://github.com/NousResearch/hermes-agent/archive/refs/tags/$HERMES_FALLBACK_TAG.tar.gz"
+    HERMES_SOURCE_REF="fallback:$HERMES_FALLBACK_TAG"
+  fi
 }
 
 patch_hermes_image_reference_support() {
@@ -290,15 +346,19 @@ patch_agents_russian_only() {
 
 install_hermes_from_source() {
   local source_tarball="$TMP_ROOT/hermes-agent-source.tar.gz"
+  resolve_hermes_source
+  printf "Resolved official Hermes source: %s (%s)\n" "$HERMES_SOURCE_URL" "$HERMES_SOURCE_REF" >> "$LOG_FILE"
   download_file "$HERMES_SOURCE_URL" "$source_tarball"
   rm -rf "$HERMES_AGENT_ROOT"
   mkdir -p "$HERMES_AGENT_ROOT"
   run_logged "Extracting Hermes source" tar --strip-components=1 -xzf "$source_tarball" -C "$HERMES_AGENT_ROOT"
   patch_official_hermes_setup
-  run_logged "Running official Hermes setup" bash -lc "cd '$HERMES_AGENT_ROOT' && HERMES_HOME='$HERMES_ROOT' bash ./setup-hermes.sh"
+  run_logged "Running official Hermes setup" run_official_hermes_setup
   [[ -x "$HERMES_AGENT_ROOT/venv/bin/python" ]] || fail "Official Hermes setup did not create Python venv"
   [[ -x "$HERMES_CMD" ]] || fail "Official Hermes setup did not create Hermes command"
-  run_logged "Installing Telegram support" "$UV_CMD" pip install --python "$HERMES_AGENT_ROOT/venv/bin/python" --only-binary=:all: "python-telegram-bot[webhooks]==22.6" "aiohttp==3.13.3" "qrcode==7.4.2"
+  run_logged "Checking official Hermes messaging support" "$HERMES_AGENT_ROOT/venv/bin/python" -c "import telegram, aiohttp, qrcode"
+  printf "managed-runtime\n" > "$HERMES_AGENT_ROOT/.install_method"
+  printf "%s\n" "$HERMES_SOURCE_REF" > "$HERMES_AGENT_ROOT/.infobiz-upstream-ref"
   mkdir -p "$HOME/.local/bin" "$HERMES_ROOT"/{cron,sessions,logs,pairing,hooks,image_cache,audio_cache,memories,skills}
   ln -sf "$HERMES_CMD" "$HOME/.local/bin/hermes"
   [[ -f "$HERMES_ROOT/.env" ]] || cp "$HERMES_AGENT_ROOT/.env" "$HERMES_ROOT/.env" 2>/dev/null || cp "$HERMES_AGENT_ROOT/.env.example" "$HERMES_ROOT/.env" 2>/dev/null || : > "$HERMES_ROOT/.env"
@@ -306,6 +366,13 @@ install_hermes_from_source() {
   if [[ -f "$HERMES_AGENT_ROOT/tools/skills_sync.py" ]]; then
     HERMES_HOME="$HERMES_ROOT" "$HERMES_AGENT_ROOT/venv/bin/python" "$HERMES_AGENT_ROOT/tools/skills_sync.py" >> "$LOG_FILE" 2>&1 || true
   fi
+}
+
+run_official_hermes_setup() {
+  (
+    cd "$HERMES_AGENT_ROOT"
+    HERMES_HOME="$HERMES_ROOT" bash ./setup-hermes.sh
+  )
 }
 
 run_hermes() {
@@ -339,12 +406,12 @@ write_profile_env() {
   fi
   cat > "$profile_root/.env" <<ENV
 TELEGRAM_BOT_TOKEN=''
-GATEWAY_ALLOW_ALL_USERS='true'
+GATEWAY_ALLOW_ALL_USERS='false'
 GROQ_API_KEY=''
 STT_GROQ_MODEL='whisper-large-v3-turbo'
 INFOBIZ_VOICE_ENGINE='local'
 HERMES_INFERENCE_PROVIDER='openai-codex'
-HERMES_INFERENCE_MODEL='gpt-5.3'
+HERMES_INFERENCE_MODEL='gpt-5.4-mini'
 HERMES_HOME='$profile_root'
 WEB_SHELL_API_URL='http://127.0.0.1:$WEB_SHELL_PORT'
 PATH='$HERMES_ROOT/node/bin:$HERMES_AGENT_ROOT/venv/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin'
@@ -361,24 +428,32 @@ apply_best_available_model() {
   HERMES_ROOT="$HERMES_ROOT" \
   HERMES_AGENT_ROOT="$HERMES_AGENT_ROOT" \
   AGENT_PROFILES="$AGENT_PROFILES" \
-  HERMES_MODEL_CANDIDATES="${HERMES_MODEL_CANDIDATES:-gpt-5.5,gpt-5.3,gpt-5.2,gpt-5.1,gpt-5,gpt-4.1}" \
+  HERMES_MODEL_CANDIDATES="${HERMES_MODEL_CANDIDATES:-}" \
   "$HERMES_AGENT_ROOT/venv/bin/python" <<'PY' >> "$LOG_FILE" 2>&1
 import os
 import re
 import subprocess
+import uuid
 from pathlib import Path
 
 try:
     import yaml
 except Exception as exc:
-    print(f"PyYAML unavailable: {exc}")
-    yaml = None
+    raise SystemExit(f"PyYAML is required to configure the selected model: {exc}")
 
 home = Path(os.environ["HERMES_ROOT"]).expanduser()
 agent_root = Path(os.environ["HERMES_AGENT_ROOT"]).expanduser()
 python = agent_root / "venv" / "bin" / "python"
 profiles = ["default"] + [p.strip() for p in os.environ.get("AGENT_PROFILES", "").split(",") if p.strip()]
 candidates = [m.strip() for m in os.environ.get("HERMES_MODEL_CANDIDATES", "").split(",") if m.strip()]
+if not candidates:
+    try:
+        from agent.auxiliary_client import _read_codex_access_token
+        from hermes_cli.codex_models import get_codex_model_ids
+        candidates = get_codex_model_ids(_read_codex_access_token())
+    except Exception as exc:
+        print(f"official Codex model discovery failed: {exc}")
+        candidates = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"]
 prompt = "Return exactly MODEL_OK and nothing else."
 
 def profile_dir(profile):
@@ -387,75 +462,48 @@ def profile_dir(profile):
 def env_quote(value):
     return "'" + value.replace("'", "'\\''") + "'"
 
+def atomic_write(path, text, mode=0o600):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        tmp.chmod(mode)
+        tmp.replace(path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
 def write_env_value(path, key, value):
     text = path.read_text(encoding="utf-8", errors="ignore") if path.exists() else ""
     line = f"{key}={env_quote(value)}"
     pattern = re.compile(rf"^{re.escape(key)}=.*$", re.M)
     text = pattern.sub(line, text) if pattern.search(text) else text.rstrip() + "\n" + line + "\n"
-    path.write_text(text, encoding="utf-8")
-    path.chmod(0o600)
+    atomic_write(path, text)
 
 def write_config_model(path, model):
-    if yaml:
-        data = yaml.safe_load(path.read_text(encoding="utf-8", errors="ignore") if path.exists() else "") or {}
-        if not isinstance(data, dict):
-            data = {}
-        model_cfg = data.setdefault("model", {})
-        if not isinstance(model_cfg, dict):
-            model_cfg = {}
-            data["model"] = model_cfg
-        model_cfg["provider"] = "openai-codex"
-        model_cfg["default"] = model
-        model_cfg["base_url"] = ""
-        model_cfg.setdefault("context_length", 100000)
-        model_cfg["openai_runtime"] = "codex_app_server"
-        model_cfg["api_mode"] = "codex_app_server"
-        compression = data.setdefault("compression", {})
-        if not isinstance(compression, dict):
-            compression = {}
-            data["compression"] = compression
-        compression["enabled"] = False
-        memory = data.setdefault("memory", {})
-        if not isinstance(memory, dict):
-            memory = {}
-            data["memory"] = memory
-        memory["nudge_interval"] = 0
-        memory["flush_min_turns"] = 0
-        skills = data.setdefault("skills", {})
-        if not isinstance(skills, dict):
-            skills = {}
-            data["skills"] = skills
-        skills["creation_nudge_interval"] = 0
-        auxiliary = data.setdefault("auxiliary", {})
-        if not isinstance(auxiliary, dict):
-            auxiliary = {}
-            data["auxiliary"] = auxiliary
-        title_generation = auxiliary.setdefault("title_generation", {})
-        if not isinstance(title_generation, dict):
-            title_generation = {}
-            auxiliary["title_generation"] = title_generation
-        title_generation["enabled"] = False
-        title_generation["provider"] = ""
-        title_generation["model"] = ""
-        title_generation["base_url"] = ""
-        title_generation["api_key"] = ""
-        aux_compression = auxiliary.setdefault("compression", {})
-        if not isinstance(aux_compression, dict):
-            aux_compression = {}
-            auxiliary["compression"] = aux_compression
-        aux_compression["provider"] = ""
-        aux_compression["model"] = ""
-        aux_compression["base_url"] = ""
-        aux_compression["api_key"] = ""
-        path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
-        return
-    text = path.read_text(encoding="utf-8", errors="ignore") if path.exists() else ""
-    if re.search(r"(?m)^model:\s*$", text):
-        text = re.sub(r"(?m)^  default:\s*.*$", f"  default: {model}", text)
-        text = re.sub(r"(?m)^  provider:\s*.*$", "  provider: openai-codex", text)
-    else:
-        text = f"model:\n  default: {model}\n  provider: openai-codex\n  base_url: https://chatgpt.com/backend-api/codex\n  context_length: 100000\n\n" + text
-    path.write_text(text, encoding="utf-8")
+    data = yaml.safe_load(path.read_text(encoding="utf-8", errors="ignore") if path.exists() else "") or {}
+    if not isinstance(data, dict):
+        data = {}
+    model_cfg = data.setdefault("model", {})
+    if not isinstance(model_cfg, dict):
+        model_cfg = {}
+        data["model"] = model_cfg
+    model_cfg["provider"] = "openai-codex"
+    model_cfg["default"] = model
+    model_cfg["base_url"] = ""
+    model_cfg.pop("context_length", None)
+    model_cfg["openai_runtime"] = "auto"
+    model_cfg.pop("api_mode", None)
+    auxiliary = data.setdefault("auxiliary", {})
+    if not isinstance(auxiliary, dict):
+        auxiliary = {}
+        data["auxiliary"] = auxiliary
+    title_generation = auxiliary.setdefault("title_generation", {})
+    if not isinstance(title_generation, dict):
+        title_generation = {}
+        auxiliary["title_generation"] = title_generation
+    title_generation["enabled"] = False
+    atomic_write(path, yaml.safe_dump(data, allow_unicode=True, sort_keys=False))
 
 def model_works(model):
     env = os.environ.copy()
@@ -486,10 +534,8 @@ for model in candidates:
         break
 
 if not selected:
-    selected = os.environ.get("HERMES_MODEL_FALLBACK", "gpt-5.3")
-    print(f"No candidate probe succeeded; falling back to {selected}")
-else:
-    print(f"Selected OpenAI Codex model: {selected}")
+    raise SystemExit("No available OpenAI Codex model passed the runtime probe")
+print(f"Selected OpenAI Codex model: {selected}")
 
 for profile in profiles:
     root = profile_dir(profile)
@@ -583,6 +629,25 @@ path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False))
 PY
 }
 
+validate_profile_payload() {
+  "$HERMES_AGENT_ROOT/venv/bin/python" - "$1" "$VERSION" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+expected_version = sys.argv[2]
+manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+required = {"default", "marketer", "copywriter", "designer", "tech"}
+if str(manifest.get("version")) != expected_version:
+    raise SystemExit(f"payload version mismatch: {manifest.get('version')} != {expected_version}")
+if not required.issubset(set(manifest.get("profiles") or [])):
+    raise SystemExit("payload profile manifest is incomplete")
+if manifest.get("hermesRequires") != ">=0.18.2":
+    raise SystemExit("payload Hermes compatibility marker is missing")
+PY
+}
+
 install_profiles_and_skills() {
   local payload="$TMP_ROOT/profile.tar.gz"
   local workdir="$TMP_ROOT/profile"
@@ -591,6 +656,7 @@ install_profiles_and_skills() {
   mkdir -p "$workdir"
   run_logged "Extracting agent profiles" tar -xzf "$payload" -C "$workdir"
   [[ -d "$workdir/profile/agents" || -d "$workdir/profile/skills" ]] || fail "Profile payload is invalid"
+  validate_profile_payload "$workdir/profile" || fail "Profile payload manifest is invalid"
 
   mkdir -p "$HERMES_ROOT/profiles"
   IFS=',' read -r -a profiles <<< "$AGENT_PROFILES"
@@ -649,20 +715,46 @@ install_profiles_and_skills() {
 install_web_shell() {
   local payload="$TMP_ROOT/web-shell.tar.gz"
   local workdir="$TMP_ROOT/web-shell"
-  download_file "$WEB_SHELL_URL" "$payload"
-  mkdir -p "$workdir"
-  run_logged "Extracting WebShell" tar -xzf "$payload" -C "$workdir"
+  local item
+  download_file "$WEB_SHELL_URL" "$payload" || return 1
+  mkdir -p "$workdir" || return 1
+  run_logged "Extracting WebShell" tar -xzf "$payload" -C "$workdir" || return 1
   [[ -d "$workdir/web-shell" ]] || fail "WebShell payload is invalid"
-  rm -rf "$WEB_SHELL_ROOT"
-  mkdir -p "$INSTALL_ROOT"
-  cp -a "$workdir/web-shell" "$WEB_SHELL_ROOT"
-  mkdir -p "$INSTALL_ROOT/workspace" "$INSTALL_ROOT/obsidian-vault" "$HOME/.hermes-workspaces"
+  mkdir -p "$INSTALL_ROOT" || return 1
+  if [[ -d "$WEB_SHELL_ROOT" ]]; then
+    PREVIOUS_WEB_SHELL_BACKUP="$INSTALL_ROOT/.web-shell.backup.$(date +%Y%m%d%H%M%S).$$"
+    mv "$WEB_SHELL_ROOT" "$PREVIOUS_WEB_SHELL_BACKUP" \
+      || { PREVIOUS_WEB_SHELL_BACKUP=""; return 1; }
+  fi
+  if ! cp -a "$workdir/web-shell" "$WEB_SHELL_ROOT"; then
+    rm -rf "$WEB_SHELL_ROOT"
+    if [[ -n "$PREVIOUS_WEB_SHELL_BACKUP" && -d "$PREVIOUS_WEB_SHELL_BACKUP" ]]; then
+      mv "$PREVIOUS_WEB_SHELL_BACKUP" "$WEB_SHELL_ROOT" || true
+      PREVIOUS_WEB_SHELL_BACKUP=""
+    fi
+    return 1
+  fi
+  if [[ -n "$PREVIOUS_WEB_SHELL_BACKUP" && -d "$PREVIOUS_WEB_SHELL_BACKUP" ]]; then
+    for item in docs.json groups.json agent-overrides.json baseline.json runs approvals snapshots preflights uploads; do
+      [[ -e "$PREVIOUS_WEB_SHELL_BACKUP/$item" ]] || continue
+      rm -rf "$WEB_SHELL_ROOT/$item" || return 1
+      cp -a "$PREVIOUS_WEB_SHELL_BACKUP/$item" "$WEB_SHELL_ROOT/" || return 1
+    done
+  fi
+  [[ -f "$WEB_SHELL_ROOT/server.mjs" && -f "$WEB_SHELL_ROOT/public/index.html" ]] || return 1
+  mkdir -p "$INSTALL_ROOT/workspace" "$INSTALL_ROOT/obsidian-vault" "$HOME/.hermes-workspaces" || return 1
 }
 
 install_systemd_services() {
   local node_cmd="$HERMES_ROOT/node/bin/node"
   [[ -x "$node_cmd" ]] || node_cmd="$(command -v node)"
   [[ -n "$WEB_SHELL_ACCESS_TOKEN" ]] || WEB_SHELL_ACCESS_TOKEN="$(openssl rand -hex 24)"
+  cat > "$INSTALL_ROOT/vps.env" <<ENV
+WEB_SHELL_ACCESS_TOKEN='$WEB_SHELL_ACCESS_TOKEN'
+WEB_SHELL_PORT='$WEB_SHELL_PORT'
+AGENT_PROFILE_ALLOW='$AGENT_PROFILE_ALLOW'
+ENV
+  chmod 600 "$INSTALL_ROOT/vps.env"
   cat > /etc/systemd/system/infobiz-web-shell.service <<SERVICE
 [Unit]
 Description=Infobiz Agents WebShell
@@ -686,7 +778,7 @@ Environment=AGENT_WORKSPACE=$INSTALL_ROOT/workspace
 Environment=OBSIDIAN_VAULT=$INSTALL_ROOT/obsidian-vault
 Environment=AGENT_PROFILE_ALLOW=$AGENT_PROFILE_ALLOW
 Environment=WEB_SHELL_API_URL=http://127.0.0.1:$WEB_SHELL_PORT
-Environment=WEB_SHELL_ACCESS_TOKEN=$WEB_SHELL_ACCESS_TOKEN
+EnvironmentFile=$INSTALL_ROOT/vps.env
 Environment=PATH=$HERMES_ROOT/node/bin:$HERMES_AGENT_ROOT/venv/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 
 [Install]
@@ -695,12 +787,6 @@ SERVICE
 
   systemctl daemon-reload
   systemctl enable --now infobiz-web-shell.service
-  cat > "$INSTALL_ROOT/vps.env" <<ENV
-WEB_SHELL_ACCESS_TOKEN='$WEB_SHELL_ACCESS_TOKEN'
-WEB_SHELL_PORT='$WEB_SHELL_PORT'
-AGENT_PROFILE_ALLOW='$AGENT_PROFILE_ALLOW'
-ENV
-  chmod 600 "$INSTALL_ROOT/vps.env"
 }
 
 install_gateway_systemd_services() {
@@ -738,7 +824,7 @@ Environment=PATH=$HERMES_ROOT/node/bin:$HERMES_AGENT_ROOT/venv/bin:$HOME/.local/
 WantedBy=multi-user.target
 SERVICE
     systemctl daemon-reload
-    systemctl enable --now "$service" || true
+    systemctl enable --now "$service" || fail "Could not start gateway service: $service"
   done
 }
 
@@ -761,12 +847,47 @@ run_openai_auth() {
   run_hermes auth add openai-codex
 }
 
+is_infobiz_managed_install() {
+  [[ -d "$HERMES_AGENT_ROOT" ]] || return 1
+  local profile profile_count=0
+  for profile in marketer copywriter designer tech; do
+    [[ -d "$HERMES_ROOT/profiles/$profile" ]] && profile_count=$((profile_count + 1))
+  done
+  if [[ -d "$INSTALL_ROOT/web-shell" && "$profile_count" -ge 1 ]]; then
+    return 0
+  fi
+  [[ "$profile_count" -ge 2 ]]
+}
+
 main() {
   mkdir -p "$INSTALL_ROOT" "$TMP_ROOT"
   : > "$LOG_FILE"
   printf "Infobiz Agents VPS install log\nStarted: %s\n" "$(date)" >> "$LOG_FILE"
   [[ "$STUDENT_UI" == "1" ]] && render_progress "Подготовка"
   require_linux
+
+  if [[ "$FORCE_REINSTALL" != "1" ]] && is_infobiz_managed_install; then
+    say "Existing Infobiz installation found; running safe update"
+    local update_script="$TMP_ROOT/update-vps-infobiz-agents.sh"
+    curl -fsSL "$UPDATE_SCRIPT_URL" -o "$update_script" || fail "Could not download safe updater"
+    chmod 700 "$update_script"
+    VERSION="$VERSION" BASE_URL="$BASE_URL" bash "$update_script"
+    return 0
+  fi
+
+  if [[ -d "$HERMES_ROOT" ]]; then
+    local existing_was_infobiz=0
+    is_infobiz_managed_install && existing_was_infobiz=1
+    local hermes_backup="$HOME/.hermes.backup.$(date +%Y%m%d%H%M%S)"
+    mv "$HERMES_ROOT" "$hermes_backup"
+    PREVIOUS_HERMES_BACKUP="$hermes_backup"
+    if [[ "$existing_was_infobiz" != "1" ]]; then
+      : > "$hermes_backup/.infobiz-restore-eligible"
+    fi
+    printf "Existing Hermes moved to %s\n" "$hermes_backup" >> "$LOG_FILE"
+  fi
+  mkdir -p "$HERMES_ROOT"
+
   say "Installing Infobiz Agents VPS stack"
   progress_stage "Подготовка сервера"
   install_system_packages
@@ -776,9 +897,9 @@ main() {
   install_node_runtime
   progress_stage "Установка Hermes официальным установщиком"
   install_hermes_from_source
-  patch_hermes_image_reference_support >> "$LOG_FILE" 2>&1
-  patch_telegram_text_photo_merge_support >> "$LOG_FILE" 2>&1
-  patch_hermes_local_media_markdown_support >> "$LOG_FILE" 2>&1
+  patch_hermes_image_reference_support >> "$LOG_FILE" 2>&1 || fail "Could not patch Hermes image reference support"
+  patch_telegram_text_photo_merge_support >> "$LOG_FILE" 2>&1 || fail "Could not patch Telegram text/photo merge support"
+  patch_hermes_local_media_markdown_support >> "$LOG_FILE" 2>&1 || fail "Could not patch local media delivery"
   progress_stage "Создание агентов и установка скиллов"
   install_profiles_and_skills
   patch_agents_russian_only >> "$LOG_FILE" 2>&1 || fail "Could not patch Russian-only agent language"
@@ -794,9 +915,23 @@ main() {
   progress_stage "Открытие доступа"
   open_firewall_if_available
 
-  public_host="$(detect_public_host)"
-  public_url="http://$public_host:$WEB_SHELL_PORT/?token=$WEB_SHELL_ACCESS_TOKEN"
+  if [[ -n "$WEB_SHELL_PUBLIC_URL" ]]; then
+    public_url="${WEB_SHELL_PUBLIC_URL%/}"
+    if [[ "$public_url" != *"token="* ]]; then
+      [[ "$public_url" == *\?* ]] && public_url="$public_url&token=$WEB_SHELL_ACCESS_TOKEN" \
+        || public_url="$public_url?token=$WEB_SHELL_ACCESS_TOKEN"
+    fi
+  else
+    public_host="$(detect_public_host)"
+    [[ -n "$public_host" ]] || fail "Could not detect the public VPS address; set PUBLIC_HOST explicitly"
+    public_url="http://$public_host:$WEB_SHELL_PORT/?token=$WEB_SHELL_ACCESS_TOKEN"
+  fi
   printf "%s\n" "$public_url" > "$INSTALL_ROOT/web-shell.url"
+  if [[ -n "$PREVIOUS_WEB_SHELL_BACKUP" ]]; then
+    rm -rf "$PREVIOUS_WEB_SHELL_BACKUP"
+    PREVIOUS_WEB_SHELL_BACKUP=""
+  fi
+  INSTALL_COMPLETED=1
 
   if [[ "$STUDENT_UI" == "1" ]]; then
     PROGRESS_STEP="$PROGRESS_TOTAL"

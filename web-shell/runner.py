@@ -13,11 +13,14 @@ from pathlib import Path
 WEB_FORBIDDEN_TOOLSETS = {
     "browser",
     "chatplace",
+    "code_execution",
     "cronjob",
     "delegation",
+    "file",
     "kanban",
     "memory",
     "session_search",
+    "terminal",
     "todo",
     "tts",
 }
@@ -32,9 +35,16 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--profile", required=True)
     parser.add_argument("--session-id", required=True)
-    parser.add_argument("--prompt", required=True)
+    prompt_group = parser.add_mutually_exclusive_group(required=True)
+    prompt_group.add_argument("--prompt")
+    prompt_group.add_argument("--prompt-stdin", action="store_true")
     parser.add_argument("--history-json", default="")
     args = parser.parse_args()
+
+    prompt = sys.stdin.read() if args.prompt_stdin else (args.prompt or "")
+    if len(prompt) > 200_000:
+        emit({"type": "run.failed", "error": "Prompt is too large"})
+        return 1
 
     session_id = args.session_id
     approval_dir = Path(os.environ["AGENT_WEB_APPROVAL_DIR"])
@@ -198,7 +208,7 @@ def main() -> int:
                 emit({"type": "history.load_failed", "error": str(exc), "path": args.history_json})
 
         result = agent.run_conversation(
-            user_message=args.prompt,
+            user_message=prompt,
             conversation_history=conversation_history,
             task_id=session_id,
         )

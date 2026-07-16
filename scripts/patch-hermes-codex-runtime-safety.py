@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 import argparse
-import json
 import re
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +36,15 @@ def ensure_dict(parent: dict[str, Any], key: str) -> dict[str, Any]:
     return value
 
 
+def atomic_write_text(path: Path, text: str, mode: int | None = None) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.infobiz.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    if mode is not None:
+        tmp.chmod(mode)
+    tmp.replace(path)
+
+
 def patch_config(path: Path, yaml: Any) -> bool:
     raw = path.read_text(encoding="utf-8", errors="ignore") if path.exists() else ""
     data = yaml.safe_load(raw) or {}
@@ -47,98 +54,71 @@ def patch_config(path: Path, yaml: Any) -> bool:
     before = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
 
     model = ensure_dict(data, "model")
+    configured_provider = str(model.get("provider") or "").strip()
+    if configured_provider and configured_provider != "openai-codex":
+        # This patch only owns the Codex OAuth runtime. Never rewrite a user
+        # profile that was deliberately switched to another provider.
+        return False
     model["provider"] = "openai-codex"
-    model["openai_runtime"] = "codex_app_server"
-    model["api_mode"] = "codex_app_server"
-    model.setdefault("default", "gpt-5.3")
+    # Keep the official Hermes transport. codex_app_server is an optional
+    # runtime that requires a separately installed `codex` executable; forcing
+    # it made clean student machines fail after an otherwise valid OAuth login.
+    model["openai_runtime"] = "auto"
+    model.pop("api_mode", None)
+    model.setdefault("default", "gpt-5.4-mini")
     model["base_url"] = ""
-    model.setdefault("context_length", 100000)
+    # Let current Hermes/Codex metadata provide the real context window. A
+    # stale hard-coded 100k cap made newer GPT-5.x models look much smaller.
+    model.pop("context_length", None)
 
-    compression = ensure_dict(data, "compression")
-    compression["enabled"] = False
+    # Student-facing messaging should deliver one finished answer. Hermes has
+    # two independent partial-output mechanisms, so disable both progressive
+    # token edits and natural mid-turn assistant messages.
+    streaming = ensure_dict(data, "streaming")
+    streaming["enabled"] = False
+    streaming["transport"] = "off"
 
-    memory = ensure_dict(data, "memory")
-    memory["nudge_interval"] = 0
-    memory["flush_min_turns"] = 0
-
-    skills = ensure_dict(data, "skills")
-    skills["creation_nudge_interval"] = 0
+    display = ensure_dict(data, "display")
+    display["streaming"] = False
+    display["interim_assistant_messages"] = False
+    platforms = ensure_dict(display, "platforms")
+    telegram = ensure_dict(platforms, "telegram")
+    telegram["streaming"] = False
 
     auxiliary = ensure_dict(data, "auxiliary")
     title_generation = ensure_dict(auxiliary, "title_generation")
     title_generation["enabled"] = False
-    title_generation["provider"] = ""
-    title_generation["model"] = ""
-    title_generation["base_url"] = ""
-    title_generation["api_key"] = ""
 
-    auxiliary_compression = ensure_dict(auxiliary, "compression")
-    auxiliary_compression["provider"] = ""
-    auxiliary_compression["model"] = ""
-    auxiliary_compression["base_url"] = ""
-    auxiliary_compression["api_key"] = ""
+    # Migrate values written by older Infobiz installers. They disabled native
+    # Hermes memory/compression nudges globally; leaving the keys in an existing
+    # config would keep those official features disabled forever after update.
+    compression = data.get("compression")
+    if isinstance(compression, dict) and compression.get("enabled") is False:
+        compression.pop("enabled", None)
+    memory = data.get("memory")
+    if isinstance(memory, dict) and memory.get("nudge_interval") == 0:
+        memory.pop("nudge_interval", None)
+    skills = data.get("skills")
+    if isinstance(skills, dict) and skills.get("creation_nudge_interval") == 0:
+        skills.pop("creation_nudge_interval", None)
 
     after = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
     if after != before or not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(after, encoding="utf-8")
+        atomic_write_text(path, after, 0o600)
         return True
     return False
 
 
-def clear_codex_usage_limit_markers(auth_path: Path) -> bool:
-    if not auth_path.exists():
+def patch_profile_env(path: Path) -> bool:
+    text = path.read_text(encoding="utf-8", errors="ignore") if path.exists() else ""
+    line = "GATEWAY_ALLOW_ALL_USERS='false'"
+    pattern = re.compile(r"^GATEWAY_ALLOW_ALL_USERS=.*$", re.M)
+    updated = pattern.sub(line, text) if pattern.search(text) else text.rstrip() + "\n" + line + "\n"
+    if updated == text and path.exists():
+        path.chmod(0o600)
         return False
-    try:
-        data = json.loads(auth_path.read_text(encoding="utf-8", errors="ignore") or "{}")
-    except Exception:
-        return False
-
-    pools = data.get("credential_pool")
-    if not isinstance(pools, dict):
-        return False
-    entries = pools.get("openai-codex")
-    if not isinstance(entries, list):
-        return False
-
-    changed = False
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        status = str(entry.get("last_status") or "").lower()
-        err_code = str(entry.get("last_error_code") or "").lower()
-        err_reason = str(entry.get("last_error_reason") or "").lower()
-        err_message = str(entry.get("last_error_message") or "").lower()
-        combined = " ".join([status, err_code, err_reason, err_message])
-        usage_marker = (
-            "usage_limit_reached" in combined
-            or "usage limit" in combined
-            or "rate" in combined
-            or err_code in {"429", "rate_limit", "rate_limited"}
-            or status in {"exhausted", "rate_limited", "rate-limited"}
-        )
-        auth_marker = (
-            "refresh_token_reused" in combined
-            or "token_expired" in combined
-            or err_code in {"401", "403", "unauthorized", "authentication_failed"}
-            or status in {"dead"}
-        )
-        if usage_marker and not auth_marker:
-            for key in (
-                "last_status",
-                "last_status_at",
-                "last_error_code",
-                "last_error_reason",
-                "last_error_message",
-                "last_error_reset_at",
-            ):
-                if entry.get(key) is not None:
-                    entry[key] = None
-                    changed = True
-    if changed:
-        data["updated_at"] = datetime.now(timezone.utc).isoformat()
-        auth_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return changed
+    atomic_write_text(path, updated, 0o600)
+    return True
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -217,20 +197,20 @@ def main() -> None:
 
     patched_title = patch_title_generator(hermes_agent_root)
     patched_configs = 0
-    cleared_markers = 0
+    patched_envs = 0
 
     for root in profile_paths(hermes_root, profiles):
         if not root.exists():
             continue
         if patch_config(root / "config.yaml", yaml):
             patched_configs += 1
-        if clear_codex_usage_limit_markers(root / "auth.json"):
-            cleared_markers += 1
+        if patch_profile_env(root / ".env"):
+            patched_envs += 1
 
     print(
         "Hermes Codex runtime safety: "
         f"title_generator={'patched' if patched_title else 'ok'}, "
-        f"configs={patched_configs}, cleared_usage_markers={cleared_markers}"
+        f"configs={patched_configs}, envs={patched_envs}"
     )
 
 

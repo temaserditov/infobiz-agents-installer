@@ -33,9 +33,14 @@ The installer uses the official Hermes repository and delegates the base Hermes
 runtime setup to Hermes' own `setup-hermes.sh` in non-interactive mode:
 
 - Hermes source: `https://github.com/NousResearch/hermes-agent`
-- Hermes source is downloaded as a GitHub tarball, not via `git clone`
+- a clean install resolves the latest official stable GitHub release and
+  downloads its tarball, not a stale bundled Hermes copy or `git clone`
+- the Mac and VPS update scripts also refresh Hermes to the latest official
+  stable release before applying the Infobiz profiles and compatibility layer
 - `uv`, Python 3.11, venv, Hermes dependencies, `.env`, command shim, and
   bundled Hermes skills are installed by the official Hermes setup script
+- official Hermes dependencies are left intact; the Infobiz installer no
+  longer downgrades `aiohttp` or replaces Hermes extras after setup
 - Node.js is still installed by the Infobiz installer because it is required by
   the bundled WebShell
 - The local web panel is installed into `~/InfobizAgents/web-shell` and started
@@ -44,10 +49,17 @@ runtime setup to Hermes' own `setup-hermes.sh` in non-interactive mode:
   otherwise in `~/Applications`
 - Telegram Bot Token is configured in the web panel after install, not in the
   terminal installer
+- Telegram access is closed until at least one allowed Telegram ID is added
+- the model picker reads the catalog from installed Hermes, adds forward-
+  compatible GPT-5.6 choices, checks account access before saving, and passes
+  the selected model into the real Codex app-server session
 - The Documents tab is built into the web panel and uses local `docs.json`;
   it does not require a separate docs server on port 3030
 - Agents can use the bundled `webshell-docs` skill to create, search, update,
   and delete pages in the built-in Documents database through the WebShell API
+- WebShell chat runs in a restricted control-panel mode: browser, terminal,
+  code-execution, and direct file toolsets are blocked there. Telegram gateways
+  keep the normal Hermes tool surface.
 - VPS installers can provide `WEB_SHELL_PUBLIC_URL` when the panel is exposed
   through a tunnel or public HTTPS endpoint
 - Student-facing output: quiet Infobiz steps only
@@ -95,7 +107,24 @@ LIVE_SMOKE=1 PROFILE=marketer EXPECT="Маркетолог" \
   ./scripts/smoke-test-profile-payload.sh
 ```
 
+When Hermes publishes a new release, also run the upstream compatibility test:
+
+```bash
+./scripts/smoke-test-hermes-upstream.sh
+```
+
+It checks both the latest stable Hermes release and current official `main`,
+applies every Infobiz source patch twice, compiles the changed modules, and
+verifies that a WebShell model choice such as `gpt-5.6-sol` reaches the Codex
+app-server thread instead of being only a visual setting.
+
 ## Build web shell payload
+
+Build the release archive with:
+
+```bash
+./scripts/build-web-shell-payload.sh
+```
 
 The release archive is:
 
@@ -153,7 +182,12 @@ Legacy remote install from a local terminal:
 curl -fsSL https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/install-vps-remote.sh | bash -s -- root@SERVER_IP
 ```
 
-Legacy remote install with password in one command:
+Legacy password-in-command mode exists for old internal tests, but it exposes
+the password to shell history. Do not give this form to students; use the
+interactive command above or the Windows launcher, both of which prompt for
+the password without echoing it.
+
+Legacy internal-only form:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/install-vps-remote.sh | bash -s -- root@SERVER_IP 'VPS_PASSWORD'

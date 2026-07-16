@@ -26,20 +26,19 @@ WEB_SHELL_TARBALL="${WEB_SHELL_TARBALL:-}"
 WEB_SHELL_PORT="${WEB_SHELL_PORT:-8787}"
 WEB_SHELL_HOST="${WEB_SHELL_HOST:-127.0.0.1}"
 WEB_SHELL_PUBLIC_URL="${WEB_SHELL_PUBLIC_URL:-}"
-HERMES_BRANCH="${HERMES_BRANCH:-main}"
-HERMES_SOURCE_URL="${HERMES_SOURCE_URL:-https://github.com/NousResearch/hermes-agent/archive/refs/heads/$HERMES_BRANCH.tar.gz}"
+HERMES_BRANCH="${HERMES_BRANCH:-}"
+HERMES_SOURCE_URL="${HERMES_SOURCE_URL:-}"
+HERMES_RELEASE_API="${HERMES_RELEASE_API:-https://api.github.com/repos/NousResearch/hermes-agent/releases/latest}"
+HERMES_FALLBACK_TAG="${HERMES_FALLBACK_TAG:-v2026.7.7.2}"
+HERMES_SOURCE_REF=""
 HERMES_IMAGE_REFERENCE_PATCH_URL="${HERMES_IMAGE_REFERENCE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-image-reference.py}"
 HERMES_TELEGRAM_TEXT_PHOTO_MERGE_PATCH_URL="${HERMES_TELEGRAM_TEXT_PHOTO_MERGE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-telegram-text-photo-merge.py}"
 HERMES_LOCAL_MEDIA_MARKDOWN_PATCH_URL="${HERMES_LOCAL_MEDIA_MARKDOWN_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-local-media-markdown.py}"
 HERMES_RUNTIME_SAFETY_PATCH_URL="${HERMES_RUNTIME_SAFETY_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-codex-runtime-safety.py}"
 AGENT_RUSSIAN_ONLY_PATCH_URL="${AGENT_RUSSIAN_ONLY_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-agent-russian-only.py}"
+UPDATE_SCRIPT_URL="${UPDATE_SCRIPT_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/update-infobiz-agents.sh}"
+FORCE_REINSTALL="${FORCE_REINSTALL:-0}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.11}"
-HERMES_EXTRAS="${HERMES_EXTRAS:-cli,mcp}"
-TELEGRAM_PACKAGES=(
-  "python-telegram-bot[webhooks]==22.6"
-  "aiohttp==3.13.3"
-  "qrcode==7.4.2"
-)
 NODE_VERSION="${NODE_VERSION:-22}"
 ARCH="$(/usr/bin/uname -m)"
 
@@ -52,10 +51,16 @@ LOG_FILE="$INSTALL_ROOT/install.log"
 HERMES_CMD="$HERMES_AGENT_ROOT/venv/bin/hermes"
 UV_CMD=""
 SHIM_DIR="$INSTALL_ROOT/shims"
+UV_INSTALLED_MARKER="$INSTALL_ROOT/.uv-installed-by-infobiz"
+NODE_INSTALLED_MARKER="$INSTALL_ROOT/.node-installed-by-infobiz"
 CLEANUP_WORKDIR=""
 FAILURE_SUPPORT_PORT="${FAILURE_SUPPORT_PORT:-8797}"
 FAILURE_SUPPORT_TOKEN=""
 FAILURE_SUPPORT_STARTED=""
+PREVIOUS_HERMES_BACKUP=""
+PREVIOUS_WEB_SHELL_BACKUP=""
+INSTALLED_WEB_SHELL_URL=""
+INSTALL_COMPLETED=0
 
 say() {
   printf "\n==> %s\n" "$1"
@@ -72,9 +77,30 @@ fail() {
 }
 
 cleanup() {
+  local exit_code=$?
+  trap - EXIT
   if [[ -n "$CLEANUP_WORKDIR" ]]; then
     /bin/rm -rf "$CLEANUP_WORKDIR"
   fi
+  if [[ "$exit_code" != "0" && "$INSTALL_COMPLETED" != "1" \
+    && -n "$PREVIOUS_HERMES_BACKUP" && -d "$PREVIOUS_HERMES_BACKUP" ]]; then
+    /bin/rm -rf "$HERMES_ROOT"
+    if /bin/mv "$PREVIOUS_HERMES_BACKUP" "$HERMES_ROOT"; then
+      printf "Restored previous Hermes after failed install.\n" >> "$LOG_FILE"
+    else
+      printf "WARNING: could not restore previous Hermes from %s\n" "$PREVIOUS_HERMES_BACKUP" >> "$LOG_FILE"
+    fi
+  fi
+  if [[ "$exit_code" != "0" && "$INSTALL_COMPLETED" != "1" \
+    && -n "$PREVIOUS_WEB_SHELL_BACKUP" && -d "$PREVIOUS_WEB_SHELL_BACKUP" ]]; then
+    /bin/rm -rf "$WEB_SHELL_ROOT"
+    if /bin/mv "$PREVIOUS_WEB_SHELL_BACKUP" "$WEB_SHELL_ROOT"; then
+      printf "Restored previous WebShell after failed install.\n" >> "$LOG_FILE"
+    else
+      printf "WARNING: could not restore previous WebShell from %s\n" "$PREVIOUS_WEB_SHELL_BACKUP" >> "$LOG_FILE"
+    fi
+  fi
+  exit "$exit_code"
 }
 
 format_seconds() {
@@ -405,11 +431,16 @@ ensure_uv() {
   else
     return 1
   fi
+  printf "%s\n" "$UV_CMD" > "$UV_INSTALLED_MARKER"
 }
 
 install_node_runtime() {
   if command -v node >/dev/null 2>&1; then
-    return 0
+    local system_node_major
+    system_node_major="$(node -p 'Number(process.versions.node.split(".")[0])' 2>/dev/null || true)"
+    if [[ "$system_node_major" == <-> && "$system_node_major" -ge 18 ]]; then
+      return 0
+    fi
   fi
   if [[ -x "$HERMES_ROOT/node/bin/node" ]]; then
     export PATH="$HERMES_ROOT/node/bin:$PATH"
@@ -420,26 +451,29 @@ install_node_runtime() {
   case "$ARCH" in
     x86_64) node_arch="x64" ;;
     arm64|aarch64) node_arch="arm64" ;;
-    *) return 0 ;;
+    *) return 1 ;;
   esac
   node_os="darwin"
   index_url="https://nodejs.org/dist/latest-v${NODE_VERSION}.x/"
   tarball_name="$(curl -fsSL "$index_url" | /usr/bin/grep -oE "node-v${NODE_VERSION}\.[0-9]+\.[0-9]+-${node_os}-${node_arch}\.tar\.xz" | /usr/bin/head -1 || true)"
-  [[ -n "$tarball_name" ]] || return 0
+  [[ -n "$tarball_name" ]] || return 1
   download_url="${index_url}${tarball_name}"
-  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/infobiz-node.XXXXXX")"
-  download_file "$download_url" "$tmp_dir/$tarball_name"
+  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/infobiz-node.XXXXXX")" || return 1
+  download_file "$download_url" "$tmp_dir/$tarball_name" \
+    || { /bin/rm -rf "$tmp_dir"; return 1; }
   run_logged "Installing Node.js runtime" /usr/bin/tar -xf "$tmp_dir/$tarball_name" -C "$tmp_dir" || return 1
   extracted_dir="$(/bin/ls -d "$tmp_dir"/node-v* 2>/dev/null | /usr/bin/head -1)"
   [[ -d "$extracted_dir" ]] || return 1
-  /bin/rm -rf "$HERMES_ROOT/node"
-  /bin/mkdir -p "$HERMES_ROOT"
-  /bin/mv "$extracted_dir" "$HERMES_ROOT/node"
+  /bin/rm -rf "$HERMES_ROOT/node" || return 1
+  /bin/mkdir -p "$HERMES_ROOT" || return 1
+  /bin/mv "$extracted_dir" "$HERMES_ROOT/node" || return 1
   /bin/rm -rf "$tmp_dir"
-  /bin/mkdir -p "$HOME/.local/bin"
-  /bin/ln -sf "$HERMES_ROOT/node/bin/node" "$HOME/.local/bin/node"
-  /bin/ln -sf "$HERMES_ROOT/node/bin/npm" "$HOME/.local/bin/npm"
-  /bin/ln -sf "$HERMES_ROOT/node/bin/npx" "$HOME/.local/bin/npx"
+  /bin/mkdir -p "$HOME/.local/bin" || return 1
+  /bin/ln -sf "$HERMES_ROOT/node/bin/node" "$HOME/.local/bin/node" || return 1
+  /bin/ln -sf "$HERMES_ROOT/node/bin/npm" "$HOME/.local/bin/npm" || return 1
+  /bin/ln -sf "$HERMES_ROOT/node/bin/npx" "$HOME/.local/bin/npx" || return 1
+  : > "$NODE_INSTALLED_MARKER" || return 1
+  [[ -x "$HERMES_ROOT/node/bin/node" ]] || return 1
   export PATH="$HERMES_ROOT/node/bin:$PATH"
 }
 
@@ -447,9 +481,8 @@ patch_official_hermes_setup() {
   local setup_path="$HERMES_AGENT_ROOT/setup-hermes.sh"
   local tmp_path="$setup_path.infobiz"
   [[ -f "$setup_path" ]] || return 1
-  /usr/bin/awk -v extras="$HERMES_EXTRAS" '
+  /usr/bin/awk '
     {
-      gsub(/\.\[all\]/, ".[" extras "]");
       if (index($0, "read -p") && index($0, "Install ripgrep for faster search")) {
         sub(/read -p.*/, "REPLY=n");
       }
@@ -458,9 +491,33 @@ patch_official_hermes_setup() {
       }
       print;
     }
-  ' "$setup_path" > "$tmp_path"
-  /bin/mv "$tmp_path" "$setup_path"
-  /bin/chmod +x "$setup_path"
+  ' "$setup_path" > "$tmp_path" || return 1
+  /bin/mv "$tmp_path" "$setup_path" || return 1
+  /bin/chmod +x "$setup_path" || return 1
+}
+
+resolve_hermes_source() {
+  if [[ -n "$HERMES_SOURCE_URL" ]]; then
+    HERMES_SOURCE_REF="custom"
+    return 0
+  fi
+  if [[ -n "$HERMES_BRANCH" ]]; then
+    HERMES_SOURCE_URL="https://github.com/NousResearch/hermes-agent/archive/refs/heads/$HERMES_BRANCH.tar.gz"
+    HERMES_SOURCE_REF="branch:$HERMES_BRANCH"
+    return 0
+  fi
+
+  local metadata tag tarball
+  metadata="$(/usr/bin/curl -fsSL --max-time 20 "$HERMES_RELEASE_API" 2>> "$LOG_FILE" || true)"
+  tag="$(printf "%s" "$metadata" | /usr/bin/sed -nE 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p' | /usr/bin/head -1)"
+  tarball="$(printf "%s" "$metadata" | /usr/bin/sed -nE 's/.*"tarball_url"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p' | /usr/bin/head -1)"
+  if [[ -n "$tarball" ]]; then
+    HERMES_SOURCE_URL="$tarball"
+    HERMES_SOURCE_REF="release:${tag:-latest}"
+  else
+    HERMES_SOURCE_URL="https://github.com/NousResearch/hermes-agent/archive/refs/tags/$HERMES_FALLBACK_TAG.tar.gz"
+    HERMES_SOURCE_REF="fallback:$HERMES_FALLBACK_TAG"
+  fi
 }
 
 patch_hermes_image_reference_support() {
@@ -500,33 +557,45 @@ patch_agents_russian_only() {
 
 install_hermes_from_source() {
   local source_tarball="$TMPDIR/hermes-agent-source.tar.gz"
-  download_file "$HERMES_SOURCE_URL" "$source_tarball"
-  /bin/rm -rf "$HERMES_AGENT_ROOT"
-  /bin/mkdir -p "$HERMES_AGENT_ROOT"
+  resolve_hermes_source || return 1
+  printf "Resolved official Hermes source: %s (%s)\n" "$HERMES_SOURCE_URL" "$HERMES_SOURCE_REF" >> "$LOG_FILE"
+  download_file "$HERMES_SOURCE_URL" "$source_tarball" || return 1
+  /bin/rm -rf "$HERMES_AGENT_ROOT" || return 1
+  /bin/mkdir -p "$HERMES_AGENT_ROOT" || return 1
   run_logged "Extracting Hermes source" /usr/bin/tar --strip-components=1 -xzf "$source_tarball" -C "$HERMES_AGENT_ROOT" || return 1
   patch_official_hermes_setup || return 1
-  run_logged "Running official Hermes setup" /bin/bash -lc "cd '$HERMES_AGENT_ROOT' && HERMES_HOME='$HERMES_ROOT' bash ./setup-hermes.sh" || return 1
+  run_logged "Running official Hermes setup" run_official_hermes_setup || return 1
   [[ -x "$HERMES_AGENT_ROOT/venv/bin/python" ]] || return 1
   [[ -x "$HERMES_CMD" ]] || return 1
-  run_logged "Installing Telegram support" "$UV_CMD" pip install --python "$HERMES_AGENT_ROOT/venv/bin/python" --only-binary=:all: "${TELEGRAM_PACKAGES[@]}" || return 1
+  run_logged "Checking official Hermes messaging support" "$HERMES_AGENT_ROOT/venv/bin/python" -c "import telegram, aiohttp, qrcode" || return 1
+  printf "managed-runtime\n" > "$HERMES_AGENT_ROOT/.install_method" || return 1
+  printf "%s\n" "$HERMES_SOURCE_REF" > "$HERMES_AGENT_ROOT/.infobiz-upstream-ref" || return 1
 
-  /bin/mkdir -p "$HOME/.local/bin" "$HERMES_ROOT"/{cron,sessions,logs,pairing,hooks,image_cache,audio_cache,memories,skills}
-  /bin/ln -sf "$HERMES_CMD" "$HOME/.local/bin/hermes"
+  /bin/mkdir -p "$HOME/.local/bin" "$HERMES_ROOT"/{cron,sessions,logs,pairing,hooks,image_cache,audio_cache,memories,skills} || return 1
+  /bin/ln -sf "$HERMES_CMD" "$HOME/.local/bin/hermes" || return 1
   if [[ ! -f "$HERMES_ROOT/.env" ]]; then
     if [[ -f "$HERMES_AGENT_ROOT/.env" ]]; then
-      /bin/cp "$HERMES_AGENT_ROOT/.env" "$HERMES_ROOT/.env"
+      /bin/cp "$HERMES_AGENT_ROOT/.env" "$HERMES_ROOT/.env" || return 1
     elif [[ -f "$HERMES_AGENT_ROOT/.env.example" ]]; then
-      /bin/cp "$HERMES_AGENT_ROOT/.env.example" "$HERMES_ROOT/.env"
+      /bin/cp "$HERMES_AGENT_ROOT/.env.example" "$HERMES_ROOT/.env" || return 1
     else
-      : > "$HERMES_ROOT/.env"
+      : > "$HERMES_ROOT/.env" || return 1
     fi
   fi
   if [[ ! -f "$HERMES_ROOT/config.yaml" && -f "$HERMES_AGENT_ROOT/cli-config.yaml.example" ]]; then
-    /bin/cp "$HERMES_AGENT_ROOT/cli-config.yaml.example" "$HERMES_ROOT/config.yaml"
+    /bin/cp "$HERMES_AGENT_ROOT/cli-config.yaml.example" "$HERMES_ROOT/config.yaml" || return 1
   fi
   if [[ -f "$HERMES_AGENT_ROOT/tools/skills_sync.py" ]]; then
     "$HERMES_AGENT_ROOT/venv/bin/python" "$HERMES_AGENT_ROOT/tools/skills_sync.py" >> "$LOG_FILE" 2>&1 || true
   fi
+  return 0
+}
+
+run_official_hermes_setup() {
+  (
+    cd "$HERMES_AGENT_ROOT"
+    HERMES_HOME="$HERMES_ROOT" /bin/bash ./setup-hermes.sh
+  )
 }
 
 persist_local_bin_path() {
@@ -607,12 +676,12 @@ write_profile_env() {
   /bin/mkdir -p "$profile_root"
   cat > "$profile_root/.env" <<ENV
 TELEGRAM_BOT_TOKEN=''
-GATEWAY_ALLOW_ALL_USERS='true'
+GATEWAY_ALLOW_ALL_USERS='false'
 GROQ_API_KEY=''
 STT_GROQ_MODEL='whisper-large-v3-turbo'
 INFOBIZ_VOICE_ENGINE='local'
 HERMES_INFERENCE_PROVIDER='openai-codex'
-HERMES_INFERENCE_MODEL='gpt-5.3'
+HERMES_INFERENCE_MODEL='gpt-5.4-mini'
 HERMES_HOME=$(shell_quote "$profile_root")
 PATH=$(shell_quote "$SHIM_DIR:$HERMES_ROOT/node/bin:$HERMES_AGENT_ROOT/venv/bin:$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin")
 INSTALL_NAME_TOOL=$(shell_quote "$SHIM_DIR/install_name_tool")
@@ -630,25 +699,33 @@ apply_best_available_model() {
   HERMES_ROOT="$HERMES_ROOT" \
   HERMES_AGENT_ROOT="$HERMES_AGENT_ROOT" \
   AGENT_PROFILES="$profiles" \
-  HERMES_MODEL_CANDIDATES="${HERMES_MODEL_CANDIDATES:-gpt-5.5,gpt-5.3,gpt-5.2,gpt-5.1,gpt-5,gpt-4.1}" \
+  HERMES_MODEL_CANDIDATES="${HERMES_MODEL_CANDIDATES:-}" \
   "$HERMES_AGENT_ROOT/venv/bin/python" <<'PY' >> "$LOG_FILE" 2>&1
 import os
 import re
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 try:
     import yaml
 except Exception as exc:
-    print(f"PyYAML unavailable: {exc}")
-    yaml = None
+    raise SystemExit(f"PyYAML is required to configure the selected model: {exc}")
 
 home = Path(os.environ["HERMES_ROOT"]).expanduser()
 agent_root = Path(os.environ["HERMES_AGENT_ROOT"]).expanduser()
 python = agent_root / "venv" / "bin" / "python"
 profiles = ["default"] + [p.strip() for p in os.environ.get("AGENT_PROFILES", "").split(",") if p.strip()]
 candidates = [m.strip() for m in os.environ.get("HERMES_MODEL_CANDIDATES", "").split(",") if m.strip()]
+if not candidates:
+    try:
+        from agent.auxiliary_client import _read_codex_access_token
+        from hermes_cli.codex_models import get_codex_model_ids
+        candidates = get_codex_model_ids(_read_codex_access_token())
+    except Exception as exc:
+        print(f"official Codex model discovery failed: {exc}")
+        candidates = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"]
 prompt = "Return exactly MODEL_OK and nothing else."
 
 def profile_dir(profile: str) -> Path:
@@ -656,6 +733,17 @@ def profile_dir(profile: str) -> Path:
 
 def env_quote(value: str) -> str:
     return "'" + value.replace("'", "'\\''") + "'"
+
+def atomic_write(path: Path, text: str, mode: int = 0o600) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        tmp.chmod(mode)
+        tmp.replace(path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
 
 def write_env_value(path: Path, key: str, value: str) -> None:
     text = path.read_text(encoding="utf-8", errors="ignore") if path.exists() else ""
@@ -665,70 +753,32 @@ def write_env_value(path: Path, key: str, value: str) -> None:
         text = pattern.sub(line, text)
     else:
         text = text.rstrip() + "\n" + line + "\n"
-    path.write_text(text, encoding="utf-8")
-    path.chmod(0o600)
+    atomic_write(path, text)
 
 def write_config_model(path: Path, model: str) -> None:
-    if yaml:
-        data = yaml.safe_load(path.read_text(encoding="utf-8", errors="ignore") if path.exists() else "") or {}
-        if not isinstance(data, dict):
-            data = {}
-        model_cfg = data.setdefault("model", {})
-        if not isinstance(model_cfg, dict):
-            model_cfg = {}
-            data["model"] = model_cfg
-        model_cfg["provider"] = "openai-codex"
-        model_cfg["default"] = model
-        model_cfg["base_url"] = ""
-        model_cfg.setdefault("context_length", 100000)
-        model_cfg["openai_runtime"] = "codex_app_server"
-        model_cfg["api_mode"] = "codex_app_server"
-        compression = data.setdefault("compression", {})
-        if not isinstance(compression, dict):
-            compression = {}
-            data["compression"] = compression
-        compression["enabled"] = False
-        memory = data.setdefault("memory", {})
-        if not isinstance(memory, dict):
-            memory = {}
-            data["memory"] = memory
-        memory["nudge_interval"] = 0
-        memory["flush_min_turns"] = 0
-        skills = data.setdefault("skills", {})
-        if not isinstance(skills, dict):
-            skills = {}
-            data["skills"] = skills
-        skills["creation_nudge_interval"] = 0
-        auxiliary = data.setdefault("auxiliary", {})
-        if not isinstance(auxiliary, dict):
-            auxiliary = {}
-            data["auxiliary"] = auxiliary
-        title_generation = auxiliary.setdefault("title_generation", {})
-        if not isinstance(title_generation, dict):
-            title_generation = {}
-            auxiliary["title_generation"] = title_generation
-        title_generation["enabled"] = False
-        title_generation["provider"] = ""
-        title_generation["model"] = ""
-        title_generation["base_url"] = ""
-        title_generation["api_key"] = ""
-        aux_compression = auxiliary.setdefault("compression", {})
-        if not isinstance(aux_compression, dict):
-            aux_compression = {}
-            auxiliary["compression"] = aux_compression
-        aux_compression["provider"] = ""
-        aux_compression["model"] = ""
-        aux_compression["base_url"] = ""
-        aux_compression["api_key"] = ""
-        path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
-        return
-    text = path.read_text(encoding="utf-8", errors="ignore") if path.exists() else ""
-    if re.search(r"(?m)^model:\s*$", text):
-        text = re.sub(r"(?m)^  default:\s*.*$", f"  default: {model}", text)
-        text = re.sub(r"(?m)^  provider:\s*.*$", "  provider: openai-codex", text)
-    else:
-        text = f"model:\n  default: {model}\n  provider: openai-codex\n  base_url: https://chatgpt.com/backend-api/codex\n  context_length: 100000\n\n" + text
-    path.write_text(text, encoding="utf-8")
+    data = yaml.safe_load(path.read_text(encoding="utf-8", errors="ignore") if path.exists() else "") or {}
+    if not isinstance(data, dict):
+        data = {}
+    model_cfg = data.setdefault("model", {})
+    if not isinstance(model_cfg, dict):
+        model_cfg = {}
+        data["model"] = model_cfg
+    model_cfg["provider"] = "openai-codex"
+    model_cfg["default"] = model
+    model_cfg["base_url"] = ""
+    model_cfg.pop("context_length", None)
+    model_cfg["openai_runtime"] = "auto"
+    model_cfg.pop("api_mode", None)
+    auxiliary = data.setdefault("auxiliary", {})
+    if not isinstance(auxiliary, dict):
+        auxiliary = {}
+        data["auxiliary"] = auxiliary
+    title_generation = auxiliary.setdefault("title_generation", {})
+    if not isinstance(title_generation, dict):
+        title_generation = {}
+        auxiliary["title_generation"] = title_generation
+    title_generation["enabled"] = False
+    atomic_write(path, yaml.safe_dump(data, allow_unicode=True, sort_keys=False))
 
 def model_works(model: str) -> bool:
     env = os.environ.copy()
@@ -759,10 +809,8 @@ for model in candidates:
         break
 
 if not selected:
-    selected = os.environ.get("HERMES_MODEL_FALLBACK", "gpt-5.3")
-    print(f"No candidate probe succeeded; falling back to {selected}")
-else:
-    print(f"Selected OpenAI Codex model: {selected}")
+    raise SystemExit("No available OpenAI Codex model passed the runtime probe")
+print(f"Selected OpenAI Codex model: {selected}")
 
 for profile in profiles:
     root = profile_dir(profile)
@@ -844,6 +892,25 @@ path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False))
 PY
 }
 
+validate_profile_payload() {
+  "$HERMES_AGENT_ROOT/venv/bin/python" - "$1" "$VERSION" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+expected_version = sys.argv[2]
+manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+required = {"default", "marketer", "copywriter", "designer", "tech"}
+if str(manifest.get("version")) != expected_version:
+    raise SystemExit(f"payload version mismatch: {manifest.get('version')} != {expected_version}")
+if not required.issubset(set(manifest.get("profiles") or [])):
+    raise SystemExit("payload profile manifest is incomplete")
+if manifest.get("hermesRequires") != ">=0.18.2":
+    raise SystemExit("payload Hermes compatibility marker is missing")
+PY
+}
+
 install_profiles_and_skills() {
   local profile_payload="$1"
   local workdir="$2"
@@ -851,6 +918,7 @@ install_profiles_and_skills() {
   local profiles
 
   [[ -d "$workdir/profile/agents" || -d "$workdir/profile/skills" ]] || fail "Profile payload is invalid"
+  validate_profile_payload "$workdir/profile" || fail "Profile payload manifest is invalid"
 
   /bin/mkdir -p "$HERMES_ROOT/profiles"
   profiles=("${(@s:,:)AGENT_PROFILES}")
@@ -956,17 +1024,38 @@ choose_web_shell_port() {
 }
 
 install_web_shell() {
-  local payload workdir node_cmd port plist label uid url
+  local payload workdir node_cmd port plist label uid url item
   local api_url
-  payload="$(need_web_shell_payload)"
-  workdir="$(mktemp -d "${TMPDIR:-/tmp}/infobiz-web-shell.XXXXXX")"
-  /usr/bin/tar -xzf "$payload" -C "$workdir" || return 1
-  [[ -d "$workdir/web-shell" ]] || return 1
+  payload="$(need_web_shell_payload)" || return 1
+  workdir="$(mktemp -d "${TMPDIR:-/tmp}/infobiz-web-shell.XXXXXX")" || return 1
+  /usr/bin/tar -xzf "$payload" -C "$workdir" || { /bin/rm -rf "$workdir"; return 1; }
+  [[ -f "$workdir/web-shell/server.mjs" && -f "$workdir/web-shell/public/index.html" ]] \
+    || { /bin/rm -rf "$workdir"; return 1; }
 
-  /bin/rm -rf "$WEB_SHELL_ROOT"
-  /bin/mkdir -p "$INSTALL_ROOT"
-  /usr/bin/ditto "$workdir/web-shell" "$WEB_SHELL_ROOT"
+  /bin/mkdir -p "$INSTALL_ROOT" || { /bin/rm -rf "$workdir"; return 1; }
+  if [[ -d "$WEB_SHELL_ROOT" ]]; then
+    PREVIOUS_WEB_SHELL_BACKUP="$INSTALL_ROOT/.web-shell.backup.$(/bin/date +%Y%m%d%H%M%S).$$"
+    /bin/mv "$WEB_SHELL_ROOT" "$PREVIOUS_WEB_SHELL_BACKUP" \
+      || { PREVIOUS_WEB_SHELL_BACKUP=""; /bin/rm -rf "$workdir"; return 1; }
+  fi
+  if ! /usr/bin/ditto "$workdir/web-shell" "$WEB_SHELL_ROOT"; then
+    /bin/rm -rf "$WEB_SHELL_ROOT"
+    if [[ -n "$PREVIOUS_WEB_SHELL_BACKUP" && -d "$PREVIOUS_WEB_SHELL_BACKUP" ]]; then
+      /bin/mv "$PREVIOUS_WEB_SHELL_BACKUP" "$WEB_SHELL_ROOT" || true
+      PREVIOUS_WEB_SHELL_BACKUP=""
+    fi
+    /bin/rm -rf "$workdir"
+    return 1
+  fi
+  if [[ -n "$PREVIOUS_WEB_SHELL_BACKUP" && -d "$PREVIOUS_WEB_SHELL_BACKUP" ]]; then
+    for item in docs.json groups.json agent-overrides.json baseline.json runs approvals snapshots preflights uploads; do
+      [[ -e "$PREVIOUS_WEB_SHELL_BACKUP/$item" ]] || continue
+      /bin/rm -rf "$WEB_SHELL_ROOT/$item" || return 1
+      /usr/bin/ditto "$PREVIOUS_WEB_SHELL_BACKUP/$item" "$WEB_SHELL_ROOT/$item" || return 1
+    done
+  fi
   /bin/rm -rf "$workdir"
+  [[ -f "$WEB_SHELL_ROOT/server.mjs" && -f "$WEB_SHELL_ROOT/public/index.html" ]] || return 1
   /usr/bin/xattr -dr com.apple.quarantine "$WEB_SHELL_ROOT" >/dev/null 2>&1 || true
   /usr/bin/xattr -dr com.apple.provenance "$WEB_SHELL_ROOT" >/dev/null 2>&1 || true
   if [[ -f "$WEB_SHELL_ROOT/server.mjs" ]]; then
@@ -1078,7 +1167,8 @@ PLIST
   if [[ -x /usr/bin/open && "${INFOBIZ_OPEN_WEB_PANEL:-1}" = "1" ]]; then
     /usr/bin/open "$url" >/dev/null 2>&1 || true
   fi
-  printf "%s" "$url"
+  INSTALLED_WEB_SHELL_URL="$url"
+  return 0
 }
 
 install_web_shell_launcher() {
@@ -1157,18 +1247,47 @@ replace_student_paths() {
   done
 }
 
+is_infobiz_managed_install() {
+  [[ -d "$HERMES_AGENT_ROOT" ]] || return 1
+  local profile profile_count=0
+  for profile in marketer copywriter designer tech; do
+    [[ -d "$HERMES_ROOT/profiles/$profile" ]] && profile_count=$((profile_count + 1))
+  done
+  if [[ -d "$INSTALL_ROOT/web-shell" && "$profile_count" -ge 1 ]]; then
+    return 0
+  fi
+  [[ "$profile_count" -ge 2 ]]
+}
+
 say "Starting Infobiz Agents installer: $AGENT_NAME"
 printf "Detected Mac architecture: %s\n" "$ARCH"
 mkdir -p "$INSTALL_ROOT" "$CONFIG_DIR"
 : > "$LOG_FILE"
 printf "Infobiz Agents install log\nStarted: %s\nMac architecture: %s\n" "$(/bin/date)" "$ARCH" >> "$LOG_FILE"
-install_command_shims
 trap cleanup EXIT
+
+if [[ "$FORCE_REINSTALL" != "1" ]] && is_infobiz_managed_install; then
+  say "Existing Infobiz installation found; running safe update"
+  update_script="$(/usr/bin/mktemp "${TMPDIR:-/tmp}/infobiz-update.XXXXXX")"
+  CLEANUP_WORKDIR="$update_script"
+  /usr/bin/curl -fsSL "$UPDATE_SCRIPT_URL" -o "$update_script" || fail "Could not download safe updater"
+  /bin/chmod 700 "$update_script"
+  VERSION="$VERSION" BASE_URL="$BASE_URL" /bin/zsh "$update_script"
+  exit 0
+fi
+
+install_command_shims
 
 say "Installing Hermes from official repository"
 if [[ -d "$HERMES_ROOT" ]]; then
+  existing_was_infobiz=0
+  is_infobiz_managed_install && existing_was_infobiz=1
   backup="$HOME/.hermes.backup.$(/bin/date +%Y%m%d%H%M%S)"
   /bin/mv "$HERMES_ROOT" "$backup"
+  PREVIOUS_HERMES_BACKUP="$backup"
+  if [[ "$existing_was_infobiz" != "1" ]]; then
+    : > "$backup/.infobiz-restore-eligible"
+  fi
   printf "Existing ~/.hermes moved to %s\n" "$backup"
 fi
 /bin/mkdir -p "$HERMES_ROOT"
@@ -1196,30 +1315,37 @@ apply_best_available_model || fail "Could not select an available OpenAI model"
 patch_hermes_codex_runtime_safety >> "$LOG_FILE" 2>&1 || fail "Could not patch Hermes Codex runtime safety"
 
 say "Installing Hermes gateway services"
-run_hermes gateway install --force >> "$LOG_FILE" 2>&1 || true
+run_hermes gateway install --force >> "$LOG_FILE" 2>&1 || fail "Could not install Hermes gateway service"
 for profile in "${(@s:,:)AGENT_PROFILES}"; do
   profile="$(printf "%s" "$profile" | /usr/bin/xargs)"
   [[ -n "$profile" ]] || continue
-  run_hermes -p "$profile" gateway install --force >> "$LOG_FILE" 2>&1 || true
+  run_hermes -p "$profile" gateway install --force >> "$LOG_FILE" 2>&1 || fail "Could not install gateway service: $profile"
 done
 
 say "Starting Hermes gateways"
-run_hermes gateway start >> "$LOG_FILE" 2>&1 || true
+run_hermes gateway start >> "$LOG_FILE" 2>&1 || fail "Could not start Hermes gateway"
 for profile in "${(@s:,:)AGENT_PROFILES}"; do
   profile="$(printf "%s" "$profile" | /usr/bin/xargs)"
   [[ -n "$profile" ]] || continue
-  run_hermes -p "$profile" gateway start >> "$LOG_FILE" 2>&1 || true
+  run_hermes -p "$profile" gateway start >> "$LOG_FILE" 2>&1 || fail "Could not start gateway: $profile"
 done
 
 say "Configuring terminal PATH for 'hermes'"
 persist_local_bin_path
 
 say "Installing local web panel"
-web_shell_url="$(install_web_shell)" || fail "Could not install local web panel"
+install_web_shell || fail "Could not install local web panel"
+web_shell_url="$INSTALLED_WEB_SHELL_URL"
+[[ -n "$web_shell_url" ]] || fail "Web panel URL was not created"
 
 say "Creating Applications shortcut"
 web_shell_app="$(install_web_shell_launcher)" || fail "Could not create web panel shortcut"
 
+if [[ -n "$PREVIOUS_WEB_SHELL_BACKUP" ]]; then
+  /bin/rm -rf "$PREVIOUS_WEB_SHELL_BACKUP"
+  PREVIOUS_WEB_SHELL_BACKUP=""
+fi
+INSTALL_COMPLETED=1
 say "Done"
 printf "Installed %s. Open the web panel to configure Telegram and use the agent:\n" "$AGENT_NAME"
 printf "%s\n" "$web_shell_url"

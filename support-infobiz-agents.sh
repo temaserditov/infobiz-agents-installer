@@ -15,8 +15,8 @@ HERMES_ROOT="${HERMES_ROOT:-$HOME/.hermes}"
 HERMES_AGENT_ROOT="${HERMES_AGENT_ROOT:-$HERMES_ROOT/hermes-agent}"
 AGENT_PROFILES="${AGENT_PROFILES:-marketer,copywriter,designer,tech}"
 SUPPORT_ENV="$INSTALL_ROOT/support.env"
-MACOS_WEB_SHELL_PLIST="$HOME/Library/LaunchAgents/com.infobiz.agents.web-shell.plist"
-LINUX_WEB_SHELL_SERVICE="/etc/systemd/system/infobiz-web-shell.service"
+MACOS_WEB_SHELL_PLIST="${MACOS_WEB_SHELL_PLIST:-$HOME/Library/LaunchAgents/com.infobiz.agents.web-shell.plist}"
+LINUX_WEB_SHELL_SERVICE="${LINUX_WEB_SHELL_SERVICE:-/etc/systemd/system/infobiz-web-shell.service}"
 
 say() {
   printf "==> %s\n" "$1"
@@ -79,39 +79,38 @@ detect_lan_ip() {
 
 update_web_shell_payload() {
   local tmp_dir payload source_dir
-  tmp_dir="${TMPDIR:-/tmp}/infobiz-support-web-shell.$$"
+  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/infobiz-support-web-shell.XXXXXX")"
   payload="$tmp_dir/web-shell.tar.gz"
-  rm -rf "$tmp_dir"
-  mkdir -p "$tmp_dir" "$WEB_SHELL_ROOT"
+  mkdir -p "$WEB_SHELL_ROOT"
   say "Updating WebShell support code"
   curl -fsSL "$WEB_SHELL_URL" -o "$payload"
   tar -xzf "$payload" -C "$tmp_dir"
   source_dir="$tmp_dir/web-shell"
   [[ -d "$source_dir" ]] || fail "WebShell archive is invalid"
-  if command -v rsync >/dev/null 2>&1; then
-    rsync -a --delete \
-      --exclude runs \
-      --exclude approvals \
-      --exclude snapshots \
-      --exclude preflights \
-      --exclude uploads \
-      "$source_dir/" "$WEB_SHELL_ROOT/"
-  else
-    cp -R "$source_dir/." "$WEB_SHELL_ROOT/"
-  fi
+  command -v rsync >/dev/null 2>&1 || fail "rsync is required for a safe support update"
+  rsync -a --delete \
+    --exclude runs \
+    --exclude approvals \
+    --exclude snapshots \
+    --exclude preflights \
+    --exclude uploads \
+    --exclude docs.json \
+    --exclude groups.json \
+    --exclude agent-overrides.json \
+    --exclude baseline.json \
+    "$source_dir/" "$WEB_SHELL_ROOT/"
   rm -rf "$tmp_dir"
 }
 
 update_profile_payload() {
-  local tmp_dir payload profile source_dir
-  tmp_dir="${TMPDIR:-/tmp}/infobiz-support-profiles.$$"
+  local tmp_dir payload profile source_dir profile_root skill_dir skill_name
+  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/infobiz-support-profiles.XXXXXX")"
   payload="$tmp_dir/profiles.tar.gz"
-  rm -rf "$tmp_dir"
-  mkdir -p "$tmp_dir"
   say "Updating agent profiles"
   curl -fsSL "$PROFILE_URL" -o "$payload"
   tar -xzf "$payload" -C "$tmp_dir"
   [[ -d "$tmp_dir/profile" ]] || fail "Agent profile archive is invalid"
+  command -v rsync >/dev/null 2>&1 || fail "rsync is required for a safe profile update"
 
   IFS=',' read -r -a profiles <<< "$AGENT_PROFILES"
   for profile in "${profiles[@]}"; do
@@ -119,37 +118,38 @@ update_profile_payload() {
     [[ -n "$profile" ]] || continue
     source_dir="$tmp_dir/profile/agents/$profile"
     [[ -d "$source_dir" ]] || continue
-    mkdir -p "$HERMES_ROOT/profiles/$profile"
-    if command -v rsync >/dev/null 2>&1; then
-      rsync -a \
-        --exclude '.env' \
-        --exclude 'config.yaml' \
-        --exclude 'sessions/' \
-        --exclude 'logs/' \
-        --exclude 'memories/' \
-        --exclude 'cron/' \
-        --exclude 'gateway.pid' \
-        "$source_dir/" "$HERMES_ROOT/profiles/$profile/"
-    else
-      cp -R "$source_dir/." "$HERMES_ROOT/profiles/$profile/"
+    profile_root="$HERMES_ROOT/profiles/$profile"
+    mkdir -p "$profile_root"
+    rsync -a \
+      --exclude '.env' --exclude '.env.*' \
+      --exclude 'auth.json' --exclude 'auth.json.*' --exclude 'auth.lock' \
+      --exclude 'config.yaml' --exclude 'config.yaml.*' \
+      --exclude 'sessions/' --exclude 'logs/' --exclude 'memories/' \
+      --exclude 'home/' --exclude 'workspace/' --exclude 'plans/' --exclude 'local/' \
+      --exclude 'MEMORY.md' --exclude 'USER.md' --exclude 'LEARNING.md' \
+      --exclude 'skills/' --exclude 'cache/' --exclude 'cron/' \
+      --exclude 'state.db*' --exclude 'response_store.db*' \
+      --exclude 'gateway.pid' --exclude 'gateway.lock' --exclude 'gateway_state.json' \
+      --exclude '.restart*' \
+      "$source_dir/" "$profile_root/"
+    if [[ -d "$source_dir/skills" ]]; then
+      mkdir -p "$profile_root/skills"
+      for skill_dir in "$source_dir"/skills/*; do
+        [[ -d "$skill_dir" ]] || continue
+        skill_name="$(basename "$skill_dir")"
+        rm -rf "$profile_root/skills/$skill_name"
+        rsync -a "$skill_dir/" "$profile_root/skills/$skill_name/"
+      done
     fi
   done
 
-  if [[ -d "$tmp_dir/profile/default" ]]; then
-    if command -v rsync >/dev/null 2>&1; then
-      rsync -a \
-        --exclude '.env' \
-        --exclude 'config.yaml' \
-        --exclude 'sessions/' \
-        --exclude 'logs/' \
-        --exclude 'memories/' \
-        --exclude 'profiles/' \
-        --exclude 'hermes-agent/' \
-        --exclude 'node/' \
-        "$tmp_dir/profile/default/" "$HERMES_ROOT/"
-    else
-      cp -R "$tmp_dir/profile/default/." "$HERMES_ROOT/"
-    fi
+  if [[ -f "$tmp_dir/profile/default/SOUL.md" ]]; then
+    cp "$tmp_dir/profile/default/SOUL.md" "$HERMES_ROOT/SOUL.md"
+  fi
+  if [[ -d "$tmp_dir/profile/skills/webshell-docs" ]]; then
+    rm -rf "$HERMES_ROOT/skills/webshell-docs"
+    mkdir -p "$HERMES_ROOT/skills/webshell-docs"
+    rsync -a "$tmp_dir/profile/skills/webshell-docs/" "$HERMES_ROOT/skills/webshell-docs/"
   fi
   rm -rf "$tmp_dir"
 }
@@ -239,16 +239,54 @@ disable_macos() {
 service_set_env() {
   local key="$1"
   local value="$2"
-  if grep -q "^Environment=$key=" "$LINUX_WEB_SHELL_SERVICE"; then
-    sed -i "s|^Environment=$key=.*|Environment=$key=$value|" "$LINUX_WEB_SHELL_SERVICE"
-  else
-    sed -i "/^Environment=PATH=/i Environment=$key=$value" "$LINUX_WEB_SHELL_SERVICE"
+  if [[ "$key" == "WEB_SHELL_ACCESS_TOKEN" ]] && grep -q '^EnvironmentFile=' "$LINUX_WEB_SHELL_SERVICE"; then
+    local env_file tmp_file
+    env_file="$(sed -n 's/^EnvironmentFile=-\{0,1\}//p' "$LINUX_WEB_SHELL_SERVICE" | tail -1)"
+    [[ -n "$env_file" ]] || env_file="$INSTALL_ROOT/vps.env"
+    mkdir -p "$(dirname "$env_file")"
+    tmp_file="$env_file.tmp.$$"
+    awk -v key="$key" -v value="$value" '
+      BEGIN { found=0 }
+      index($0, key "=") == 1 { print key "=\047" value "\047"; found=1; next }
+      { print }
+      END { if (!found) print key "=\047" value "\047" }
+    ' "$env_file" 2>/dev/null > "$tmp_file" || printf "%s='%s'\n" "$key" "$value" > "$tmp_file"
+    mv "$tmp_file" "$env_file"
+    chmod 600 "$env_file"
+    tmp_file="$LINUX_WEB_SHELL_SERVICE.tmp.$$"
+    awk -v prefix="Environment=$key=" 'index($0, prefix) != 1 { print }' "$LINUX_WEB_SHELL_SERVICE" > "$tmp_file"
+    mv "$tmp_file" "$LINUX_WEB_SHELL_SERVICE"
+    chmod 644 "$LINUX_WEB_SHELL_SERVICE"
+    return
   fi
+  local tmp_file="$LINUX_WEB_SHELL_SERVICE.tmp.$$"
+  awk -v key="$key" -v value="$value" '
+    BEGIN { found=0; prefix="Environment=" key "=" }
+    index($0, prefix) == 1 { print prefix value; found=1; next }
+    /^Environment=PATH=/ && !found { print prefix value; found=1 }
+    { print }
+    END { if (!found) print prefix value }
+  ' "$LINUX_WEB_SHELL_SERVICE" > "$tmp_file"
+  mv "$tmp_file" "$LINUX_WEB_SHELL_SERVICE"
+  chmod 644 "$LINUX_WEB_SHELL_SERVICE"
 }
 
 service_delete_env() {
   local key="$1"
-  sed -i "/^Environment=$key=/d" "$LINUX_WEB_SHELL_SERVICE"
+  if [[ "$key" == "WEB_SHELL_ACCESS_TOKEN" ]] && grep -q '^EnvironmentFile=' "$LINUX_WEB_SHELL_SERVICE"; then
+    local env_file tmp_file
+    env_file="$(sed -n 's/^EnvironmentFile=-\{0,1\}//p' "$LINUX_WEB_SHELL_SERVICE" | tail -1)"
+    if [[ -n "$env_file" && -f "$env_file" ]]; then
+      tmp_file="$env_file.tmp.$$"
+      awk -v key="$key" 'index($0, key "=") != 1 { print }' "$env_file" > "$tmp_file"
+      mv "$tmp_file" "$env_file"
+      chmod 600 "$env_file"
+    fi
+  fi
+  local unit_tmp="$LINUX_WEB_SHELL_SERVICE.tmp.$$"
+  awk -v prefix="Environment=$key=" 'index($0, prefix) != 1 { print }' "$LINUX_WEB_SHELL_SERVICE" > "$unit_tmp"
+  mv "$unit_tmp" "$LINUX_WEB_SHELL_SERVICE"
+  chmod 644 "$LINUX_WEB_SHELL_SERVICE"
 }
 
 restart_linux_web_shell() {
@@ -266,7 +304,7 @@ restart_gateway_services() {
         if [[ "$profile" == "default" ]]; then
           label="ai.hermes.gateway"
         else
-          label="ai.hermes.gateway.$profile"
+        label="ai.hermes.gateway-$profile"
         fi
         launchctl kickstart -k "gui/$uid/$label" >/dev/null 2>&1 || true
       done
@@ -302,9 +340,10 @@ disable_linux() {
 
 wait_for_web_shell() {
   local url="$1"
+  local token="${2:-}"
   local i
   for i in $(seq 1 20); do
-    if curl -fsS --max-time 2 "$url/api/agents" >/dev/null 2>&1; then
+    if curl -fsS --max-time 2 "$url/api/agents?token=$token" >/dev/null 2>&1; then
       return 0
     fi
     sleep 1
@@ -346,7 +385,7 @@ main() {
   panel_url="http://$ip:$port/?token=$token"
   support_url="http://$ip:$port/api/support/bundle?token=$token"
   local_url="http://127.0.0.1:$port"
-  wait_for_web_shell "$local_url" || printf "WARNING: WebShell did not answer yet. Try the links in 10-20 seconds.\n" >&2
+  wait_for_web_shell "$local_url" "$token" || printf "WARNING: WebShell did not answer yet. Try the links in 10-20 seconds.\n" >&2
 
   printf "\nРежим поддержки включен.\n"
   printf "Панель: %s\n" "$panel_url"

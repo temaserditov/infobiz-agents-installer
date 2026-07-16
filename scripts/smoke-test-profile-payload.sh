@@ -42,6 +42,54 @@ if [[ -d "$PAYLOAD/agents/producer" ]]; then
   fail "Unexpected producer profile found in payload"
 fi
 
+say "Checking payload privacy and runtime isolation"
+python3 - "$PAYLOAD" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = Path(sys.argv[1])
+forbidden_names = {
+    ".env", "auth.json", "auth.lock", "config.yaml",
+    "MEMORY.md", "USER.md", "LEARNING.md",
+    "state.db", "state.db-shm", "state.db-wal",
+    "response_store.db", "response_store.db-shm", "response_store.db-wal",
+    "gateway.pid", "gateway.lock", "gateway_state.json",
+    ".restart_last_processed.json",
+}
+forbidden_dirs = {
+    "sessions", "memories", "logs", "cache", "audio_cache", "image_cache",
+    "document_cache", "cron", "hooks", "pairing", "sandboxes", "home",
+    "workspace", "plans", "local", ".archives", "test-runs", "tmp",
+}
+
+errors = []
+for path in payload.rglob("*"):
+    rel = path.relative_to(payload)
+    if path.name.startswith("._") or path.name == ".DS_Store":
+        errors.append(f"macOS metadata leaked: {rel}")
+    if path.name in forbidden_names or path.name.startswith((".env.", "auth.json.", "config.yaml.", ".restart")):
+        errors.append(f"runtime/secret file leaked: {rel}")
+    if path.is_dir() and path.name in forbidden_dirs:
+        errors.append(f"runtime directory leaked: {rel}")
+
+manifest_path = payload / "manifest.json"
+try:
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+except Exception as exc:
+    errors.append(f"invalid manifest.json: {exc}")
+else:
+    if "source" in manifest:
+        errors.append("manifest leaks local source path")
+    if manifest.get("hermesRequires") != ">=0.18.2":
+        errors.append("manifest hermesRequires is missing or unexpected")
+
+if errors:
+    print("\n".join(errors))
+    raise SystemExit(1)
+print("Payload contains distribution files only.")
+PY
+
 say "Checking student skill allowlist"
 python3 - "$PAYLOAD" <<'PY'
 import sys
@@ -253,7 +301,7 @@ required = [
     "do not moralize",
     "generic model",
     "failed draft",
-    "reference_image",
+    "image_url",
     "plain text-only generation",
 ]
 for needle in required:

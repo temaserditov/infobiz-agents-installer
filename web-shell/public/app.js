@@ -1,6 +1,6 @@
 const state = {
   agents: [],
-  active: "coordinator",
+  active: "default",
   resources: null,
   diagnostics: null,
   controlCenter: null,
@@ -44,6 +44,8 @@ const state = {
   selectedRunId: null,
   runId: null,
   eventSource: null,
+  lastEventIdByRun: {},
+  chatLoadGeneration: 0,
   approvals: new Map(),
   pendingAttachments: [],
   cardAgentId: null,
@@ -77,6 +79,11 @@ const state = {
 };
 
 const avatarSources = {};
+
+document.addEventListener("error", (event) => {
+  const image = event.target;
+  if (image instanceof HTMLImageElement && image.dataset.removeOnError === "true") image.remove();
+}, true);
 
 const nullEl = {
   className: "",
@@ -297,7 +304,7 @@ function avatarMarkup(agent) {
   if (!src) return `<div class="agent-avatar avatar-${escapeHtml(agent.id)}">${label}</div>`;
   return `
     <div class="agent-avatar avatar-${escapeHtml(agent.id)}">
-      <img src="${escapeHtml(src)}" alt="${escapeHtml(agent.name)}" loading="lazy" onerror="this.remove()" />
+      <img src="${escapeHtml(src)}" alt="${escapeHtml(agent.name)}" loading="lazy" data-remove-on-error="true" />
       <span>${label}</span>
     </div>
   `;
@@ -361,7 +368,7 @@ function groupInitials(name) {
 function groupAvatarMarkup(group) {
   const initials = escapeHtml(groupInitials(group.name));
   return group.avatar
-    ? `<div class="agent-avatar"><img src="${escapeHtml(group.avatar)}" alt="" onerror="this.remove()" /><span>${initials}</span></div>`
+    ? `<div class="agent-avatar"><img src="${escapeHtml(group.avatar)}" alt="" data-remove-on-error="true" /><span>${initials}</span></div>`
     : `<div class="agent-avatar">${initials}</div>`;
 }
 
@@ -433,7 +440,7 @@ function updateActive() {
     els.activeMeta.textContent = `${group.members.length} ${pluralMembers(group.members.length)}`;
     els.activeMeta.classList.remove("typing");
     els.activeAvatar.innerHTML = group.avatar
-      ? `<img src="${escapeHtml(group.avatar)}" alt="" onerror="this.remove()" />`
+      ? `<img src="${escapeHtml(group.avatar)}" alt="" data-remove-on-error="true" />`
       : escapeHtml(groupInitials(group.name));
     els.ctxGauge.hidden = true;
     return;
@@ -445,7 +452,7 @@ function updateActive() {
   els.activeMeta.classList.remove("typing");
   const src = agent && agentAvatarSrc(agent);
   els.activeAvatar.innerHTML = src
-    ? `<img src="${escapeHtml(src)}" alt="" onerror="this.remove()" />`
+    ? `<img src="${escapeHtml(src)}" alt="" data-remove-on-error="true" />`
     : escapeHtml(agent ? avatarLabel(agent) : "");
   updateContextGauge(agent);
 }
@@ -484,7 +491,7 @@ function cardAgent() {
 
 function renderCardAvatar(src, label) {
   els.cardAvatar.innerHTML = src
-    ? `<img src="${escapeHtml(src)}" alt="" onerror="this.remove()" />`
+    ? `<img src="${escapeHtml(src)}" alt="" data-remove-on-error="true" />`
     : escapeHtml(label || "");
 }
 
@@ -584,7 +591,7 @@ async function loadGroups() {
 function memberAvatarMarkup(agent) {
   const src = agent && agentAvatarSrc(agent);
   return src
-    ? `<div class="m-avatar"><img src="${escapeHtml(src)}" alt="" onerror="this.remove()" /></div>`
+    ? `<div class="m-avatar"><img src="${escapeHtml(src)}" alt="" data-remove-on-error="true" /></div>`
     : `<div class="m-avatar">${escapeHtml(agent ? avatarLabel(agent) : "?")}</div>`;
 }
 
@@ -657,7 +664,7 @@ function renderCgSelected() {
       if (!agent) return "";
       const src = agentAvatarSrc(agent);
       const av = src
-        ? `<span class="chip-av"><img src="${escapeHtml(src)}" alt="" onerror="this.remove()" /></span>`
+        ? `<span class="chip-av"><img src="${escapeHtml(src)}" alt="" data-remove-on-error="true" /></span>`
         : `<span class="chip-av">${escapeHtml(avatarLabel(agent))}</span>`;
       return `<span class="cg-chip">${av}${escapeHtml(agent.name)}<span class="chip-x" data-id="${escapeHtml(id)}">×</span></span>`;
     })
@@ -1231,7 +1238,7 @@ function openTelegramModal(agentId, mode) {
     : `Токен бота: ${agent?.name || agentId}`;
   els.telegramModalFieldLabel.textContent = mode === "id" ? "Telegram ID" : "Bot token";
   els.telegramModalHint.innerHTML = mode === "id"
-    ? "Можно добавить несколько ID через запятую или с новой строки. Пустое поле снимет ограничение."
+    ? "Можно добавить несколько ID через запятую или с новой строки. Пустое поле закроет доступ к боту для всех пользователей."
     : 'Где взять токен: открой <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a>, нажми Start, отправь <code>/newbot</code>, задай имя и username бота, затем скопируй token вида <code>1234567890:AA...</code>. После сохранения Telegram gateway перезапустится автоматически.';
   els.telegramModal.hidden = false;
   window.setTimeout(() => els.telegramModalInput.focus(), 0);
@@ -1817,8 +1824,9 @@ function getActiveChat() {
 }
 
 async function loadChatMessages(sessionId, { silent = false, agentId = state.active } = {}) {
+  const loadGeneration = ++state.chatLoadGeneration;
   const data = await api(`/api/agents/${agentId}/chats/${sessionId}/messages`);
-  if (state.active !== agentId) return;
+  if (state.active !== agentId || state.chatLoadGeneration !== loadGeneration) return;
   state.activeChatId = sessionId;
   state.activeChatByAgent[agentId] = sessionId;
   renderAgentChats();
@@ -1926,6 +1934,7 @@ function selectAgent(agentId) {
     state.eventSource = null;
   }
   state.active = agentId;
+  state.chatLoadGeneration += 1;
   state.activeGroupId = null;
   state.activeChatId = state.activeChatByAgent[agentId] || null;
   state.chats = [];
@@ -3182,6 +3191,7 @@ function addActivity(event) {
     "run.started": "запуск начат",
     "run.completed": "запуск готов",
     "run.failed": "ошибка запуска",
+    "run.interrupted": "запуск прерван",
     "run.exited": "запуск завершен",
     "tool.event": "инструмент",
     "agent.ready": "агент готов",
@@ -3263,7 +3273,9 @@ function connectEvents(runId, sender = null) {
   const conversationKey = activeConversationKey();
   const boundAgent = state.active;
   const boundGroupId = state.activeGroupId;
-  state.eventSource = new EventSource(`/api/runs/${runId}/events`);
+  const after = Number(state.lastEventIdByRun[runId] || 0);
+  const eventSource = new EventSource(`/api/runs/${runId}/events?after=${after}`);
+  state.eventSource = eventSource;
   let assistantNode = null;
   let typingNode = addTyping();
   let assistantBuffer = "";
@@ -3284,12 +3296,21 @@ function connectEvents(runId, sender = null) {
     else setActiveTyping(false);
   };
 
-  state.eventSource.onmessage = (message) => {
+  const closeEventSource = () => {
+    eventSource.close();
+    if (state.eventSource === eventSource) state.eventSource = null;
+  };
+
+  eventSource.onmessage = (message) => {
     const event = JSON.parse(message.data);
+    const eventId = Number(message.lastEventId || event.eventId || 0);
+    if (eventId && eventId <= Number(state.lastEventIdByRun[runId] || 0)) return;
+    if (eventId) state.lastEventIdByRun[runId] = eventId;
     addActivity(event);
     if (activeConversationKey() !== conversationKey) {
-      if (event.type === "run.completed" || event.type === "run.failed" || event.type === "run.exited") {
+      if (event.type === "run.completed" || event.type === "run.failed" || event.type === "run.interrupted" || event.type === "run.exited") {
         loadRuns().catch(() => {});
+        closeEventSource();
       }
       return;
     }
@@ -3345,6 +3366,7 @@ function connectEvents(runId, sender = null) {
       loadHealth().catch(() => {});
       loadRuns().catch(() => {});
       if (activeConversationKey() === conversationKey) loadAgentChats({ refreshMessages: false }).catch(() => {});
+      closeEventSource();
     }
 
     if (event.type === "run.failed") {
@@ -3354,6 +3376,17 @@ function connectEvents(runId, sender = null) {
       finishRun("ошибка");
       loadHealth().catch(() => {});
       loadRuns().catch(() => {});
+      closeEventSource();
+    }
+
+    if (event.type === "run.interrupted") {
+      clearTyping();
+      closeStatusGroup();
+      addMessage("assistant", "Ответ был прерван перезапуском WebShell. Отправьте сообщение ещё раз.", "warning");
+      finishRun("прервано");
+      loadHealth().catch(() => {});
+      loadRuns().catch(() => {});
+      closeEventSource();
     }
 
     if (event.type === "run.exited") {
@@ -3362,13 +3395,18 @@ function connectEvents(runId, sender = null) {
       finishRun(statusLabel(event.status) || "завершен");
       loadHealth().catch(() => {});
       loadRuns().catch(() => {});
+      closeEventSource();
     }
   };
 
-  state.eventSource.onerror = () => {
-    clearTyping();
-    closeStatusGroup();
-    finishRun("соединение закрыто");
+  eventSource.onerror = () => {
+    // EventSource reconnects automatically and sends Last-Event-ID. Keep the
+    // run bound to this stream so a brief network drop does not lose output or
+    // an approval request while the agent is still working.
+    if (state.eventSource === eventSource) {
+      els.activeMeta.textContent = "переподключение…";
+      els.activeMeta.classList.add("typing");
+    }
   };
 }
 

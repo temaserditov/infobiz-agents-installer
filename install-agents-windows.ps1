@@ -13,7 +13,10 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     Write-Host "Перезапускаю установщик в 64-bit PowerShell..." -ForegroundColor Gray
     $tmpScript = Join-Path $env:TEMP ("infobiz-agents-windows-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".ps1")
     Invoke-WebRequest -Uri ($SelfUrl + "?cb=force64-" + (Get-Date -Format "yyyyMMddHHmmss")) -OutFile $tmpScript
-    & $powershell64 -NoProfile -ExecutionPolicy Bypass -File $tmpScript
+    $childArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $tmpScript)
+    if ($Server) { $childArgs += @("-Server", $Server) }
+    if ($User) { $childArgs += @("-User", $User) }
+    & $powershell64 @childArgs
     exit $LASTEXITCODE
   }
 }
@@ -79,13 +82,22 @@ function Get-Plink {
   $toolDir = Join-Path $env:TEMP "infobiz-agents-tools"
   $plink = Join-Path $toolDir "plink.exe"
   if (Test-Path $plink) {
-    return $plink
+    $cachedSignature = Get-AuthenticodeSignature -FilePath $plink
+    if ($cachedSignature.Status -eq [System.Management.Automation.SignatureStatus]::Valid) {
+      return $plink
+    }
+    Remove-Item -Force $plink -ErrorAction SilentlyContinue
   }
 
   Write-Step "Подготовка запасного SSH-подключения"
   New-Item -ItemType Directory -Force -Path $toolDir | Out-Null
   $url = "https://the.earth.li/~sgtatham/putty/latest/w64/plink.exe"
   Invoke-WebRequest -Uri $url -OutFile $plink
+  $signature = Get-AuthenticodeSignature -FilePath $plink
+  if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+    Remove-Item -Force $plink -ErrorAction SilentlyContinue
+    throw "Скачанный Plink не прошел проверку цифровой подписи."
+  }
   return $plink
 }
 
@@ -114,14 +126,22 @@ function Invoke-PlinkInstall {
   $parts = Split-Server $Target
   $plink = Get-Plink
   $password = Get-PlainTextPassword
+  $passwordFile = Join-Path $env:TEMP ("infobiz-plink-password-" + [guid]::NewGuid().ToString("N") + ".txt")
+  [IO.File]::WriteAllText($passwordFile, $password, (New-Object Text.UTF8Encoding($false)))
 
   Write-Step "Повторное подключение через PuTTY/Plink"
   Write-Host "Если появится вопрос о ключе сервера, скрипт автоматически ответит yes." -ForegroundColor Gray
   Write-Host ""
 
-  "y" | & $plink -ssh -P 22 -l $parts.Login -pw $password $parts.Host "exit"
-  & $plink -ssh -t -P 22 -l $parts.Login -pw $password $parts.Host $RemoteCommand
-  return $LASTEXITCODE
+  try {
+    "y" | & $plink -ssh -P 22 -l $parts.Login -pwfile $passwordFile $parts.Host "exit"
+    if ($LASTEXITCODE -ne 0) { return $LASTEXITCODE }
+    & $plink -ssh -t -P 22 -l $parts.Login -pwfile $passwordFile $parts.Host $RemoteCommand
+    return $LASTEXITCODE
+  } finally {
+    Remove-Item -Force $passwordFile -ErrorAction SilentlyContinue
+    $password = $null
+  }
 }
 
 if (-not $Server) {
@@ -141,7 +161,7 @@ $ssh = Ensure-OpenSsh
 $debugLog = Join-Path $env:TEMP ("infobiz-agents-ssh-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".log")
 
 $remote = @'
-STUDENT_UI=1 VERSION='0.1.0' BASE_URL='https://github.com/temaserditov/infobiz-agents-installer/releases/download/v0.1.0' bash -lc 'tmp=/tmp/install-vps-infobiz-agents.sh; curl -fsSL https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/install-vps-infobiz-agents.sh -o $tmp; chmod +x $tmp; $tmp'
+STUDENT_UI=1 VERSION='0.1.0' BASE_URL='https://github.com/temaserditov/infobiz-agents-installer/releases/download/v0.1.0' bash -lc 'set -euo pipefail; tmp=$(mktemp /tmp/infobiz-install.XXXXXX); trap '"'"'rm -f "$tmp"'"'"' EXIT; curl -fsSL https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/install-vps-infobiz-agents.sh -o "$tmp"; chmod 700 "$tmp"; "$tmp"'
 '@
 
 Write-Step "Подключение к VPS"
@@ -151,11 +171,19 @@ Write-Host ""
 
 & $ssh -tt `
   -o BatchMode=no `
+  -o StrictHostKeyChecking=accept-new `
   -E $debugLog `
   $Server `
   $remote
 
-if ($LASTEXITCODE -ne 0) {
+$sshExit = $LASTEXITCODE
+if ($sshExit -ne 0) {
+  if ($sshExit -ne 255) {
+    Write-Host ""
+    Write-Host "VPS подключился, но серверный установщик завершился с ошибкой ($sshExit). Повторно установку не запускаю." -ForegroundColor Red
+    Write-Host "Диагностический лог SSH: $debugLog" -ForegroundColor Gray
+    exit $sshExit
+  }
   Write-Host ""
   Write-Host "Диагностический лог SSH: $debugLog" -ForegroundColor Gray
   if (Test-Path $debugLog) {

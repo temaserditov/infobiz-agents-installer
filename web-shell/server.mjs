@@ -1,7 +1,7 @@
 import http from "node:http";
 import { spawn, spawnSync } from "node:child_process";
-import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { extname, join, resolve } from "node:path";
+import { chmodSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 
@@ -9,6 +9,10 @@ const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || process.env.WEB_SHELL_HOST || "127.0.0.1";
 const WEB_SHELL_ACCESS_TOKEN = String(process.env.WEB_SHELL_ACCESS_TOKEN || "").trim();
+const LOOPBACK_BIND_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
+if (!WEB_SHELL_ACCESS_TOKEN && !LOOPBACK_BIND_HOSTS.has(String(HOST).trim().toLowerCase())) {
+  throw new Error("WEB_SHELL_ACCESS_TOKEN is required when WebShell listens outside loopback");
+}
 const HOME_DIR = process.env.HOME || process.env.USERPROFILE || "/tmp";
 const LOCAL_BIN = join(HOME_DIR, ".local", "bin");
 const LAUNCH_AGENTS_DIR = join(HOME_DIR, "Library", "LaunchAgents");
@@ -68,11 +72,17 @@ const RUN_HISTORY_MESSAGE_LIMIT = 14;
 const RUN_HISTORY_TOTAL_CHARS = 24_000;
 const RUN_HISTORY_MESSAGE_CHARS = 4_000;
 const MAX_WEB_PROMPT_CHARS = 50_000;
-const OPENAI_CODEX_MODEL_OPTIONS = (process.env.INFOBIZ_MODEL_OPTIONS || "gpt-5.5,gpt-5.3,gpt-5.2,gpt-5.1,gpt-5,gpt-4.1")
+const MAX_UPLOAD_FILES = 120;
+const MAX_UPLOAD_TOTAL_BYTES = 500 * 1024 * 1024;
+const OPENAI_CODEX_MODEL_OPTIONS = (process.env.INFOBIZ_MODEL_OPTIONS || "gpt-5.6-sol,gpt-5.6-sol-pro,gpt-5.6-terra,gpt-5.6-terra-pro,gpt-5.6-luna,gpt-5.6-luna-pro,gpt-5.5,gpt-5.4,gpt-5.4-mini,gpt-5.3-codex")
   .split(",")
   .map((item) => item.trim())
   .filter(Boolean);
-const OPENAI_CODEX_MODEL_FALLBACK = process.env.INFOBIZ_MODEL_FALLBACK || "gpt-5.3";
+const OPENAI_CODEX_MODEL_FALLBACK = process.env.INFOBIZ_MODEL_FALLBACK || "gpt-5.4-mini";
+const MODEL_DISCOVERY_TTL_MS = 60_000;
+const MODEL_PROBE_TTL_MS = 10 * 60_000;
+let modelDiscoveryCache = { at: 0, models: [] };
+const modelProbeCache = new Map();
 const GROQ_STT_MODEL_OPTIONS = (process.env.INFOBIZ_STT_GROQ_MODELS || "whisper-large-v3-turbo,whisper-large-v3,distil-whisper-large-v3-en")
   .split(",")
   .map((item) => item.trim())
@@ -82,7 +92,8 @@ const STT_PROVIDER_OPTIONS = [
   { id: "local", label: "Hermes", description: "Родной speech-to-text без API-ключа" },
   { id: "groq", label: "Groq", description: "Groq Whisper API через ключ gsk_..." },
 ];
-const WEB_FORBIDDEN_TOOLSETS = ["browser", "chatplace", "cronjob", "delegation", "kanban", "memory", "session_search", "todo", "tts"];
+const PROFILE_DISABLED_TOOLSETS = ["browser", "chatplace", "cronjob", "delegation", "kanban", "memory", "session_search", "todo", "tts"];
+const WEB_RUNTIME_FORBIDDEN_TOOLSETS = [...new Set([...PROFILE_DISABLED_TOOLSETS, "code_execution", "file", "terminal"])];
 const CONTEXT_BLOAT_PATHS = [
   join(HERMES_WORKSPACES_ROOT, "assistant", "projects", "open-design"),
   join(HERMES_WORKSPACES_ROOT, "assistant", "projects", "chatplace-bot"),
@@ -204,7 +215,8 @@ const MODEL_WINDOW_OVERRIDES = (() => {
   }
 })();
 const MODEL_WINDOW_RULES = [
-  [/gpt-5|gpt5|codex/, 400000],
+  [/gpt-5\.6|gpt-5\.5|gpt-5\.4/, 272000],
+  [/gpt-5|gpt5|codex/, 256000],
   [/gpt-4\.1/, 1000000],
   [/gpt-4o|gpt-4-turbo/, 128000],
   [/gpt-3\.5/, 16000],
@@ -216,12 +228,26 @@ const MODEL_WINDOW_RULES = [
   [/qwen/, 128000],
 ];
 
+function cachedCodexContextWindow(model) {
+  const cache = readJson(join(HOME_DIR, ".codex", "models_cache.json"), {});
+  const entries = Array.isArray(cache?.models) ? cache.models : [];
+  const wanted = String(model || "").trim().toLowerCase();
+  const found = entries.find((entry) => {
+    const id = String(entry?.slug || entry?.id || entry?.model || "").trim().toLowerCase();
+    return id === wanted;
+  });
+  const value = Number(found?.context_window || found?.contextWindow || 0);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
 function contextWindowForModel(model) {
   const name = String(model || "").toLowerCase();
   if (!name) return CONTEXT_WINDOW_DEFAULT;
   for (const [key, value] of Object.entries(MODEL_WINDOW_OVERRIDES)) {
     if (name.includes(String(key).toLowerCase())) return Number(value) || CONTEXT_WINDOW_DEFAULT;
   }
+  const codexCached = cachedCodexContextWindow(model);
+  if (codexCached) return codexCached;
   for (const [pattern, value] of MODEL_WINDOW_RULES) {
     if (pattern.test(name)) return value;
   }
@@ -274,7 +300,7 @@ function readOverrides() {
 }
 
 function writeOverrides(data) {
-  writeFileSync(OVERRIDES_PATH, JSON.stringify(data, null, 2), "utf8");
+  atomicWriteFile(OVERRIDES_PATH, JSON.stringify(data, null, 2), "utf8");
 }
 
 function setAgentProfile(agentId, patch) {
@@ -302,7 +328,7 @@ function readGroups() {
 }
 
 function writeGroups(groups) {
-  writeFileSync(GROUPS_PATH, JSON.stringify(groups, null, 2), "utf8");
+  atomicWriteFile(GROUPS_PATH, JSON.stringify(groups, null, 2), "utf8");
 }
 
 function createGroup({ name, avatar, members }) {
@@ -352,7 +378,7 @@ function readDocs() {
 }
 
 function writeDocs(docs) {
-  writeFileSync(DOCS_PATH, JSON.stringify(docs, null, 2), "utf8");
+  atomicWriteFile(DOCS_PATH, JSON.stringify(docs, null, 2), "utf8");
 }
 
 function createDoc({ title, parentId, content, icon }) {
@@ -493,6 +519,23 @@ function readText(path, fallback = "") {
   }
 }
 
+function atomicWriteFile(path, data, options = "utf8") {
+  const normalized = typeof options === "string" ? { encoding: options } : { ...options };
+  if (normalized.mode === undefined && existsSync(path)) {
+    normalized.mode = statSync(path).mode & 0o777;
+  }
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = join(dirname(path), `.${String(path).split("/").at(-1)}.${process.pid}.${randomUUID()}.tmp`);
+  try {
+    writeFileSync(tmp, data, normalized);
+    if (normalized.mode !== undefined) chmodSync(tmp, normalized.mode);
+    renameSync(tmp, path);
+  } catch (error) {
+    try { unlinkSync(tmp); } catch {}
+    throw error;
+  }
+}
+
 function readJson(path, fallback) {
   try {
     return JSON.parse(readText(path, ""));
@@ -522,7 +565,7 @@ function persistRun(run) {
   delete payload.clientCount;
   delete payload.ageMs;
   delete payload.longRunning;
-  writeFileSync(runFile(run.id), JSON.stringify(payload, null, 2), "utf8");
+  atomicWriteFile(runFile(run.id), JSON.stringify(payload, null, 2), "utf8");
   pruneRunHistory();
 }
 
@@ -563,15 +606,31 @@ function loadPersistedRuns() {
   for (const file of files.reverse()) {
     const saved = readJson(file, null);
     if (!saved?.id) continue;
-    runs.set(saved.id, {
+    const savedEvents = Array.isArray(saved.events) ? saved.events : [];
+    const wasInterrupted = ["starting", "running"].includes(saved.status);
+    let nextEventId = savedEvents.reduce((max, event, index) => Math.max(max, Number(event?.eventId || index + 1)), 0);
+    if (wasInterrupted && savedEvents.at(-1)?.type !== "run.interrupted") {
+      nextEventId += 1;
+      savedEvents.push({
+        ts: Date.now(),
+        type: "run.interrupted",
+        status: "interrupted",
+        error: "WebShell restarted while the agent was working",
+        eventId: nextEventId,
+      });
+    }
+    const restoredRun = {
       ...saved,
-      status: ["starting", "running"].includes(saved.status) ? "interrupted" : saved.status,
-      events: Array.isArray(saved.events) ? saved.events : [],
+      status: wasInterrupted ? "interrupted" : saved.status,
+      events: savedEvents,
+      nextEventId,
       clients: new Set(),
       proc: null,
       watchdog: null,
       approvalDir: saved.approvalDir || join(APPROVALS_DIR, saved.id),
-    });
+    };
+    runs.set(saved.id, restoredRun);
+    if (wasInterrupted) persistRun(restoredRun);
   }
 }
 
@@ -688,7 +747,9 @@ function redactSensitiveText(value) {
     .replace(/\bsk-proj-[A-Za-z0-9_-]{20,}\b/g, "[openai-key]")
     .replace(/\bsk-[A-Za-z0-9_-]{20,}\b/g, "[openai-key]")
     .replace(/(Authorization:\s*Bearer\s+)[^\s"'<>]+/gi, "$1[redacted]")
-    .replace(/((?:OPENAI_API_KEY|GROQ_API_KEY|TELEGRAM_BOT_TOKEN|WEB_SHELL_ACCESS_TOKEN|INFOBIZ_SUPPORT_TOKEN|TOKEN|SECRET|PASSWORD|AUTH|BEARER)\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;]+)/gi, "$1[redacted]");
+    .replace(/((?:OPENAI_API_KEY|GROQ_API_KEY|TELEGRAM_BOT_TOKEN|WEB_SHELL_ACCESS_TOKEN|INFOBIZ_SUPPORT_TOKEN|TOKEN|SECRET|PASSWORD|AUTH|BEARER)\s*(?::|=|=>)\s*)("[^"]*"|'[^']*'|[^\s,;<>]+)/gi, "$1[redacted]")
+    .replace(/(<string>\s*(?:WEB_SHELL_ACCESS_TOKEN|INFOBIZ_SUPPORT_TOKEN|TELEGRAM_BOT_TOKEN|GROQ_API_KEY)\s*<\/string>\s*<string>)[^<]*(<\/string>)/gi, "$1[redacted]$2")
+    .replace(/([?&](?:token|access_token)=)[^&#\s]+/gi, "$1[redacted]");
 }
 
 function redactSensitive(value) {
@@ -1095,7 +1156,7 @@ function modelSettings(agentId) {
   const envModel = readEnvValue(env, "HERMES_INFERENCE_MODEL");
   const manualModel = readEnvValue(env, "INFOBIZ_MODEL_MANUAL_SELECTED");
   const autoModel = readEnvValue(env, "INFOBIZ_MODEL_AUTO_SELECTED");
-  const current = config.model || envModel || autoModel || OPENAI_CODEX_MODEL_FALLBACK;
+  const current = envModel || config.model || autoModel || OPENAI_CODEX_MODEL_FALLBACK;
   return {
     ok: existsSync(profileDir(agentId)),
     profile: agentId,
@@ -1111,24 +1172,124 @@ function modelSettings(agentId) {
   };
 }
 
-function modelSettingsAll() {
+function runChildCapture(command, args, { cwd, env, timeoutMs = 30_000, maxOutputBytes = 1_000_000 } = {}) {
+  return new Promise((resolveRun) => {
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let timedOut = false;
+    let spawnError = null;
+    const child = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+    const append = (current, chunk) => `${current}${chunk}`.slice(-maxOutputBytes);
+    child.stdout?.on("data", (chunk) => { stdout = append(stdout, chunk.toString("utf8")); });
+    child.stderr?.on("data", (chunk) => { stderr = append(stderr, chunk.toString("utf8")); });
+    child.on("error", (error) => { spawnError = error; });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, timeoutMs);
+    child.on("close", (status, signal) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveRun({ status, signal, stdout, stderr, timedOut, error: spawnError });
+    });
+  });
+}
+
+async function discoverOpenAICodexModels({ force = false } = {}) {
+  const now = Date.now();
+  if (!force && modelDiscoveryCache.models.length && now - modelDiscoveryCache.at < MODEL_DISCOVERY_TTL_MS) {
+    return modelDiscoveryCache.models;
+  }
+  const code = String.raw`
+import json
+
+from hermes_cli.codex_models import get_codex_model_ids
+
+try:
+    from agent.auxiliary_client import _read_codex_access_token
+    token = _read_codex_access_token()
+except Exception:
+    token = None
+
+print(json.dumps(get_codex_model_ids(token), ensure_ascii=True))
+`;
+  const result = await runChildCapture(HERMES_PYTHON, ["-c", code], {
+    cwd: HERMES_AGENT_ROOT,
+    env: { ...process.env, HERMES_HOME: profileDir("default") },
+    timeoutMs: 15_000,
+  });
+  let discovered = [];
+  if (result.status === 0) {
+    try {
+      const line = String(result.stdout || "").trim().split(/\r?\n/).at(-1) || "[]";
+      const parsed = JSON.parse(line);
+      if (Array.isArray(parsed)) discovered = parsed;
+    } catch {
+      discovered = [];
+    }
+  }
+  const models = [...new Set([...discovered, ...OPENAI_CODEX_MODEL_OPTIONS])]
+    .map((item) => String(item || "").trim())
+    .filter((item) => /^[a-z0-9][a-z0-9._-]{1,80}$/i.test(item));
+  modelDiscoveryCache = { at: now, models };
+  return models;
+}
+
+async function probeOpenAICodexModel(agentId, model) {
+  const cacheKey = `${agentId}:${model}`;
+  const cache = modelProbeCache.get(cacheKey);
+  if (cache && Date.now() - cache.at < MODEL_PROBE_TTL_MS) return cache;
+  const env = {
+    ...process.env,
+    HERMES_HOME: profileDir(agentId),
+    HERMES_INFERENCE_PROVIDER: "openai-codex",
+    HERMES_INFERENCE_MODEL: model,
+  };
+  const result = await runChildCapture(HERMES_PYTHON, [
+    "-m", "hermes_cli.main", "-z", "Return exactly MODEL_OK and nothing else.",
+    "--provider", "openai-codex", "--model", model, "--ignore-rules",
+  ], {
+    cwd: HERMES_AGENT_ROOT,
+    env,
+    timeoutMs: 90_000,
+  });
+  const output = redactSensitiveText(`${result.stdout || ""}\n${result.stderr || ""}`).trim();
+  const probe = {
+    at: Date.now(),
+    ok: result.status === 0 && output.includes("MODEL_OK"),
+    model,
+    error: result.timedOut
+      ? "проверка не ответила за 90 секунд"
+      : result.error?.message || (result.status === 0 ? "" : output.slice(-600)),
+  };
+  modelProbeCache.set(cacheKey, probe);
+  return probe;
+}
+
+async function modelSettingsAll() {
   const profiles = PROFILE_ORDER
     .filter((id) => existsSync(profileDir(id)))
     .map((id) => modelSettings(id));
+  const options = [...new Set([
+    ...await discoverOpenAICodexModels(),
+    ...profiles.map((profile) => profile.model).filter(Boolean),
+  ])];
   return {
     ok: true,
     provider: "openai-codex",
-    options: OPENAI_CODEX_MODEL_OPTIONS,
+    options,
     fallback: OPENAI_CODEX_MODEL_FALLBACK,
     profiles,
     models: [...new Set(profiles.map((profile) => profile.model).filter(Boolean))].sort(),
   };
 }
 
-function validateOpenAICodexModel(model) {
+async function validateOpenAICodexModel(model) {
   const value = String(model || "").trim();
   if (!value) throw new Error("model is required");
-  if (!OPENAI_CODEX_MODEL_OPTIONS.includes(value)) {
+  if (!(await discoverOpenAICodexModels()).includes(value)) {
     throw new Error(`unsupported model: ${value}`);
   }
   return value;
@@ -1139,75 +1300,46 @@ function writeConfigModel(agentId, model) {
   const code = String.raw`
 import re
 import sys
+import uuid
 from pathlib import Path
+import yaml
 
-try:
-    import yaml
-except Exception:
-    yaml = None
+def atomic_write(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.webshell.tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        tmp.chmod(0o600)
+        tmp.replace(path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
 
 path = Path(sys.argv[1])
 model = sys.argv[2]
-if yaml:
-    data = yaml.safe_load(path.read_text(encoding="utf-8", errors="ignore") if path.exists() else "") or {}
-    if not isinstance(data, dict):
-        data = {}
-    model_cfg = data.setdefault("model", {})
-    if not isinstance(model_cfg, dict):
-        model_cfg = {}
-        data["model"] = model_cfg
-    model_cfg["provider"] = "openai-codex"
-    model_cfg["default"] = model
-    model_cfg["base_url"] = ""
-    model_cfg.setdefault("context_length", 100000)
-    model_cfg["openai_runtime"] = "codex_app_server"
-    model_cfg["api_mode"] = "codex_app_server"
-    compression = data.setdefault("compression", {})
-    if not isinstance(compression, dict):
-        compression = {}
-        data["compression"] = compression
-    compression["enabled"] = False
-    memory = data.setdefault("memory", {})
-    if not isinstance(memory, dict):
-        memory = {}
-        data["memory"] = memory
-    memory["nudge_interval"] = 0
-    memory["flush_min_turns"] = 0
-    skills = data.setdefault("skills", {})
-    if not isinstance(skills, dict):
-        skills = {}
-        data["skills"] = skills
-    skills["creation_nudge_interval"] = 0
-    auxiliary = data.setdefault("auxiliary", {})
-    if not isinstance(auxiliary, dict):
-        auxiliary = {}
-        data["auxiliary"] = auxiliary
-    title_generation = auxiliary.setdefault("title_generation", {})
-    if not isinstance(title_generation, dict):
-        title_generation = {}
-        auxiliary["title_generation"] = title_generation
-    title_generation["enabled"] = False
-    title_generation["provider"] = ""
-    title_generation["model"] = ""
-    title_generation["base_url"] = ""
-    title_generation["api_key"] = ""
-    aux_compression = auxiliary.setdefault("compression", {})
-    if not isinstance(aux_compression, dict):
-        aux_compression = {}
-        auxiliary["compression"] = aux_compression
-    aux_compression["provider"] = ""
-    aux_compression["model"] = ""
-    aux_compression["base_url"] = ""
-    aux_compression["api_key"] = ""
-    path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
-else:
-    text = path.read_text(encoding="utf-8", errors="ignore") if path.exists() else ""
-    if re.search(r"(?m)^model:\s*$", text):
-        text = re.sub(r"(?m)^  default:\s*.*$", f"  default: {model}", text)
-        text = re.sub(r"(?m)^  provider:\s*.*$", "  provider: openai-codex", text)
-    else:
-        text = f"model:\n  default: {model}\n  provider: openai-codex\n  base_url: https://chatgpt.com/backend-api/codex\n  context_length: 100000\n\n" + text
-    path.write_text(text, encoding="utf-8")
+data = yaml.safe_load(path.read_text(encoding="utf-8", errors="ignore") if path.exists() else "") or {}
+if not isinstance(data, dict):
+    data = {}
+model_cfg = data.setdefault("model", {})
+if not isinstance(model_cfg, dict):
+    model_cfg = {}
+    data["model"] = model_cfg
+model_cfg["provider"] = "openai-codex"
+model_cfg["default"] = model
+model_cfg["base_url"] = ""
+model_cfg.pop("context_length", None)
+model_cfg["openai_runtime"] = "auto"
+model_cfg.pop("api_mode", None)
+auxiliary = data.setdefault("auxiliary", {})
+if not isinstance(auxiliary, dict):
+    auxiliary = {}
+    data["auxiliary"] = auxiliary
+title_generation = auxiliary.setdefault("title_generation", {})
+if not isinstance(title_generation, dict):
+    title_generation = {}
+    auxiliary["title_generation"] = title_generation
+title_generation["enabled"] = False
+atomic_write(path, yaml.safe_dump(data, allow_unicode=True, sort_keys=False))
 `;
   const result = spawnSync(HERMES_PYTHON, ["-", configPath, model], {
     input: code,
@@ -1220,15 +1352,22 @@ else:
   }
 }
 
-function saveModelSetting(agentId, model) {
-  model = validateOpenAICodexModel(model);
+async function saveModelSetting(agentId, model) {
+  model = await validateOpenAICodexModel(model);
   const before = modelSettings(agentId);
+  if (before.model !== model || before.envModel !== model) {
+    const probe = await probeOpenAICodexModel(agentId, model);
+    if (!probe.ok) {
+      throw new Error(`Модель ${model} недоступна для этой авторизации${probe.error ? `: ${probe.error}` : "."}`);
+    }
+  }
   const path = envPath(agentId);
   let text = readText(path, "");
   text = writeEnvValue(text, "HERMES_INFERENCE_PROVIDER", "openai-codex");
   text = writeEnvValue(text, "HERMES_INFERENCE_MODEL", model);
   text = writeEnvValue(text, "INFOBIZ_MODEL_MANUAL_SELECTED", model);
-  writeFileSync(path, text, { encoding: "utf8", mode: 0o600 });
+  atomicWriteFile(path, text, { encoding: "utf8", mode: 0o600 });
+  chmodSync(path, 0o600);
   writeConfigModel(agentId, model);
   let restart = { ok: false, restarted: false };
   try {
@@ -1246,7 +1385,7 @@ function saveModelSetting(agentId, model) {
   };
 }
 
-function saveModelSettings(models) {
+async function saveModelSettings(models) {
   if (!models || typeof models !== "object" || Array.isArray(models)) {
     throw new Error("models object required");
   }
@@ -1254,12 +1393,12 @@ function saveModelSettings(models) {
   const results = [];
   for (const [agentId, rawModel] of Object.entries(models)) {
     if (!allowed.has(agentId)) continue;
-    const model = validateOpenAICodexModel(rawModel);
+    const model = await validateOpenAICodexModel(rawModel);
     const before = modelSettings(agentId);
     if (before.model === model && before.envModel === model) continue;
-    results.push(saveModelSetting(agentId, model));
+    results.push(await saveModelSetting(agentId, model));
   }
-  return { ok: true, settings: modelSettingsAll(), results };
+  return { ok: true, settings: await modelSettingsAll(), results };
 }
 
 function sttProviderLabel(provider) {
@@ -1346,51 +1485,47 @@ function voiceSettingsAll() {
 function writeConfigStt(agentId, provider, groqModel) {
   const configPath = join(profileDir(agentId), "config.yaml");
   const code = String.raw`
-import re
 import sys
+import uuid
 from pathlib import Path
+import yaml
 
-try:
-    import yaml
-except Exception:
-    yaml = None
+def atomic_write(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.webshell.tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        tmp.chmod(0o600)
+        tmp.replace(path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
 
 path = Path(sys.argv[1])
 provider = sys.argv[2]
 groq_model = sys.argv[3]
 
-if yaml:
-    data = yaml.safe_load(path.read_text(encoding="utf-8", errors="ignore") if path.exists() else "") or {}
-    if not isinstance(data, dict):
-        data = {}
-    stt = data.setdefault("stt", {})
-    if not isinstance(stt, dict):
-        stt = {}
-        data["stt"] = stt
-    stt["enabled"] = True
-    stt["provider"] = provider
-    local = stt.setdefault("local", {})
-    if isinstance(local, dict):
-        local.setdefault("model", "base")
-    else:
-        stt["local"] = {"model": "base"}
-    if provider == "groq":
-        groq = stt.setdefault("groq", {})
-        if not isinstance(groq, dict):
-            groq = {}
-            stt["groq"] = groq
-        groq["model"] = groq_model
-    path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+data = yaml.safe_load(path.read_text(encoding="utf-8", errors="ignore") if path.exists() else "") or {}
+if not isinstance(data, dict):
+    data = {}
+stt = data.setdefault("stt", {})
+if not isinstance(stt, dict):
+    stt = {}
+    data["stt"] = stt
+stt["enabled"] = True
+stt["provider"] = provider
+local = stt.setdefault("local", {})
+if isinstance(local, dict):
+    local.setdefault("model", "base")
 else:
-    text = path.read_text(encoding="utf-8", errors="ignore") if path.exists() else ""
-    stt_block = "stt:\n  enabled: true\n  provider: " + provider + "\n  local:\n    model: base\n"
-    if provider == "groq":
-        stt_block += "  groq:\n    model: " + groq_model + "\n"
-    if re.search(r"(?m)^stt:\s*$", text):
-        text = re.sub(r"(?ms)^stt:\s*\n(?:  .*\n?)*", stt_block, text, count=1)
-    else:
-        text = text.rstrip() + "\n\n" + stt_block
-    path.write_text(text, encoding="utf-8")
+    stt["local"] = {"model": "base"}
+if provider == "groq":
+    groq = stt.setdefault("groq", {})
+    if not isinstance(groq, dict):
+        groq = {}
+        stt["groq"] = groq
+    groq["model"] = groq_model
+atomic_write(path, yaml.safe_dump(data, allow_unicode=True, sort_keys=False))
 `;
   const result = spawnSync(HERMES_PYTHON, ["-", configPath, provider, groqModel], {
     input: code,
@@ -1418,9 +1553,13 @@ function saveVoiceSetting(agentId, { provider, groqApiKey, updateGroqApiKey = fa
       throw new Error(`Вставь Groq API key для «${nameLabel(agentId)}»`);
     }
     text = writeEnvValue(text, "STT_GROQ_MODEL", groqModel);
+  } else {
+    // The local Hermes engine does not need the external secret. Switching
+    // back to local is also the explicit way to remove the stored Groq key.
+    text = deleteEnvValue(text, "GROQ_API_KEY");
   }
   text = writeEnvValue(text, "INFOBIZ_VOICE_ENGINE", provider);
-  writeFileSync(path, text, { encoding: "utf8", mode: 0o600 });
+  atomicWriteFile(path, text, { encoding: "utf8", mode: 0o600 });
   writeConfigStt(agentId, provider, groqModel);
   let restart = { ok: false, restarted: false };
   try {
@@ -1451,6 +1590,7 @@ function saveVoiceSettings({ provider, groqApiKey, updateGroqApiKey = false, gro
     const normalizedModel = validateGroqSttModel(groqModel);
     if (
       normalizedProvider === before.provider &&
+      (normalizedProvider !== "local" || !before.groqConfigured) &&
       (normalizedProvider !== "groq" || before.groqModel === normalizedModel) &&
       (normalizedProvider !== "groq" || before.groqConfigured || updateGroqApiKey) &&
       (!updateGroqApiKey || !groqApiKey)
@@ -2393,7 +2533,7 @@ function recordPreflight(agentId, message, result) {
       suggestedMode: result.routing?.suggestedMode || result.promptRisk?.suggestedMode || "quick",
     },
   };
-  writeFileSync(preflightFile(id), JSON.stringify(record, null, 2), "utf8");
+  atomicWriteFile(preflightFile(id), JSON.stringify(record, null, 2), "utf8");
   pruneFiles(PREFLIGHTS_DIR, (name) => name.startsWith("preflight_") && name.endsWith(".json"), PREFLIGHT_HISTORY_LIMIT);
   return record;
 }
@@ -2465,14 +2605,39 @@ function readinessSummary() {
 function resetAgentSessions(agentId) {
   const dir = profileDir(agentId);
   if (!existsSync(dir)) throw new Error(`profile not found: ${agentId}`);
-  const uid = String(process.getuid?.() || 501);
-  const label = gatewayLabel(agentId);
-  runCommand("launchctl", ["bootout", `gui/${uid}/${label}`]);
+  if (process.platform === "linux") {
+    const service = systemdGatewayService(agentId);
+    runCommand("systemctl", ["stop", service]);
+    const result = archiveAgentSessions(agentId, "web-reset");
+    const start = runCommand("systemctl", ["start", service]);
+    return {
+      ...result,
+      restarted: start.code === 0,
+      method: "systemd",
+      error: start.code === 0 ? "" : (start.stderr || start.stdout || `exit ${start.code}`),
+    };
+  }
+
+  if (process.platform === "darwin") {
+    const uid = String(process.getuid?.() || 501);
+    const label = gatewayLabel(agentId);
+    const target = `gui/${uid}/${label}`;
+    runCommand("launchctl", ["bootout", target]);
+    const result = archiveAgentSessions(agentId, "web-reset");
+    const plist = join(LAUNCH_AGENTS_DIR, `${label}.plist`);
+    if (existsSync(plist)) runCommand("launchctl", ["bootstrap", `gui/${uid}`, plist]);
+    const kick = runCommand("launchctl", ["kickstart", "-k", target]);
+    return {
+      ...result,
+      restarted: kick.code === 0,
+      method: "launchctl",
+      error: kick.code === 0 ? "" : (kick.stderr || kick.stdout || `exit ${kick.code}`),
+    };
+  }
+
   const result = archiveAgentSessions(agentId, "web-reset");
-  const plist = join(LAUNCH_AGENTS_DIR, `${label}.plist`);
-  runCommand("launchctl", ["bootstrap", `gui/${uid}`, plist]);
-  runCommand("launchctl", ["kickstart", "-k", `gui/${uid}/${label}`]);
-  return { ...result, restarted: true };
+  const restart = restartAgentGateway(agentId, { force: true });
+  return { ...result, restarted: Boolean(restart.restarted), method: restart.method, error: restart.error || "" };
 }
 
 function restartAgentGateway(agentId, options = {}) {
@@ -2554,7 +2719,7 @@ function archiveAgentSessions(agentId, reason = "web-archive") {
     renameSync(sessionDir, archive);
   }
   mkdirSync(sessionDir, { recursive: true });
-  writeFileSync(join(sessionDir, "sessions.json"), "{}\n", "utf8");
+  atomicWriteFile(join(sessionDir, "sessions.json"), "{}\n", { encoding: "utf8", mode: 0o600 });
   return { ok: true, archive, sessions: join(sessionDir, "sessions.json"), restarted: false };
 }
 
@@ -2585,7 +2750,7 @@ function archiveTelegramSessions(agentId, reason = "telegram-token") {
   }
 
   if (removed.length) {
-    writeFileSync(indexPath, `${JSON.stringify(kept, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    atomicWriteFile(indexPath, `${JSON.stringify(kept, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   }
   return { ok: true, removed: removed.length, archive: removed.length ? archiveRoot : null };
 }
@@ -2642,7 +2807,7 @@ function ensureTelegramPlatformEnabled(agentId) {
   let text = readText(configPath, "");
   if (/^platforms:\s*$/m.test(text) && /(^|\n)  telegram:\s*\n(?:    .*\n)*?    enabled:\s*true\b/m.test(text)) return;
   text = `${text.replace(/\s*$/, "")}\n\n# Infobiz Agents messaging defaults\nplatforms:\n  telegram:\n    enabled: true\n`;
-  writeFileSync(configPath, text, { encoding: "utf8", mode: 0o600 });
+  atomicWriteFile(configPath, text, { encoding: "utf8", mode: 0o600 });
 }
 
 function telegramSettings(agentId) {
@@ -2650,6 +2815,7 @@ function telegramSettings(agentId) {
   const text = readText(path, "");
   const token = readEnvValue(text, "TELEGRAM_BOT_TOKEN");
   const allowedUsersRaw = readEnvValue(text, "TELEGRAM_ALLOWED_USERS");
+  const allowAllUsers = readEnvValue(text, "GATEWAY_ALLOW_ALL_USERS").toLowerCase() === "true";
   let allowedUsers = allowedUsersRaw;
   try {
     allowedUsers = normalizeTelegramAllowedUsers(allowedUsersRaw);
@@ -2663,6 +2829,8 @@ function telegramSettings(agentId) {
     tokenPreview: token ? `${token.slice(0, 6)}...${token.slice(-4)}` : "",
     allowedUsers,
     allowedUsersConfigured: Boolean(allowedUsers),
+    allowAllUsers,
+    accessClosed: Boolean(token) && !allowedUsers && !allowAllUsers,
     envPath: path,
     gateway: agentDiagnostics(agentId).gateway.status,
   };
@@ -2719,8 +2887,12 @@ function saveTelegramSettings(agentId, { token, allowedUsers, updateToken = true
       ? writeEnvValue(text, "TELEGRAM_ALLOWED_USERS", normalizedAllowedUsers)
       : deleteEnvValue(text, "TELEGRAM_ALLOWED_USERS");
   }
+  // A bot without an allowlist must be closed, not exposed to every Telegram
+  // user. Adding an ID later opens access only for those explicit accounts.
+  text = writeEnvValue(text, "GATEWAY_ALLOW_ALL_USERS", "false");
   text = writeEnvValue(text, "INFOBIZ_AGENT_IDENTITY_REV", "20260614-telegram-identity");
-  writeFileSync(path, text, { encoding: "utf8", mode: 0o600 });
+  atomicWriteFile(path, text, { encoding: "utf8", mode: 0o600 });
+  chmodSync(path, 0o600);
   ensureTelegramPlatformEnabled(agentId);
   const tokenChanged = updateToken && beforeToken !== token;
   const allowlistChanged = updateAllowedUsers && beforeAllowedUsers !== normalizedAllowedUsers;
@@ -2840,7 +3012,7 @@ function configDriftSummary() {
   const profiles = PROFILE_ORDER.map((id) => ({ id, name: nameLabel(id), config: configSummary(id) }));
   const fields = ["provider", "model", "maxTurns", "idleMinutes", "apiMaxRetries"];
   const expected = Object.fromEntries(fields.map((field) => [field, mostCommonValue(profiles.map((profile) => profile.config[field]))]));
-  const requiredToolsets = new Set(WEB_FORBIDDEN_TOOLSETS);
+  const requiredToolsets = new Set(PROFILE_DISABLED_TOOLSETS);
   const rows = profiles.map((profile) => {
     const fieldDrift = fields
       .filter((field) => String(profile.config[field] || "") !== String(expected[field] || ""))
@@ -2903,7 +3075,7 @@ function hygieneState() {
 
 function createBaseline() {
   const baseline = hygieneState();
-  writeFileSync(BASELINE_PATH, JSON.stringify(baseline, null, 2), "utf8");
+  atomicWriteFile(BASELINE_PATH, JSON.stringify(baseline, null, 2), "utf8");
   return { ok: true, path: BASELINE_PATH, baseline, drift: baselineDriftSummary(baseline) };
 }
 
@@ -3135,7 +3307,7 @@ function sessionPressureSummary() {
 function webToolPolicySummary() {
   const profiles = PROFILE_ORDER.map((id) => {
     const config = configSummary(id);
-    const missingDisabled = WEB_FORBIDDEN_TOOLSETS.filter((toolset) => !config.disabledToolsets.includes(toolset));
+    const missingDisabled = PROFILE_DISABLED_TOOLSETS.filter((toolset) => !config.disabledToolsets.includes(toolset));
     return {
       id,
       name: nameLabel(id),
@@ -3143,7 +3315,13 @@ function webToolPolicySummary() {
       ok: missingDisabled.length === 0,
     };
   });
-  return { ok: profiles.every((profile) => profile.ok), forbidden: WEB_FORBIDDEN_TOOLSETS, profiles };
+  return {
+    ok: profiles.every((profile) => profile.ok),
+    forbidden: WEB_RUNTIME_FORBIDDEN_TOOLSETS,
+    profileDisabled: PROFILE_DISABLED_TOOLSETS,
+    runtimeOnly: WEB_RUNTIME_FORBIDDEN_TOOLSETS.filter((toolset) => !PROFILE_DISABLED_TOOLSETS.includes(toolset)),
+    profiles,
+  };
 }
 
 function routeSummary() {
@@ -3388,7 +3566,7 @@ function createSnapshot() {
     resources: resourceSummary(),
     runs: [...runs.values()].map((run) => safeRun(run, { includeEvents: false })),
   };
-  writeFileSync(path, JSON.stringify(snapshot, null, 2), "utf8");
+  atomicWriteFile(path, JSON.stringify(snapshot, null, 2), "utf8");
   pruneFiles(SNAPSHOTS_DIR, (name) => name.endsWith(".json"), SNAPSHOT_HISTORY_LIMIT);
   return { ok: true, path, snapshot };
 }
@@ -3572,15 +3750,6 @@ function exportState() {
 
 function auditSummary() {
   const requiredDisabled = ["browser", "chatplace", "cronjob", "delegation", "kanban", "memory", "session_search", "todo", "tts"];
-  const coordinatorSkills = skillsSummary("coordinator");
-  const coordinatorCloseLoopDisabled =
-    !coordinatorSkills.workspace.skills.includes("close-loop") &&
-    !coordinatorSkills.profile.skills.includes("close-loop");
-  const coordinatorActiveSkills = [...coordinatorSkills.workspace.skills, ...coordinatorSkills.profile.skills];
-  const coordinatorLean =
-    coordinatorActiveSkills.length === 1 &&
-    coordinatorActiveSkills[0] === "internal-handoff" &&
-    (skillRiskSummary().profiles.find((profile) => profile.id === "coordinator")?.riskySkills || 0) === 0;
   const legacySkills = legacySkillSummary();
   const bundledSkills = bundledSkillDumpSummary();
   const contextSurface = contextSurfaceSummary();
@@ -3626,8 +3795,6 @@ function auditSummary() {
     { id: "sessions", label: "No unguarded bloated active non-deferred sessions", ok: auditedAgents.every((agent) => agent.sessions === "clean") || sessionTokenGuard.ok },
     { id: "rules", label: "Startup/anti-bloat/OpenClaw rules present", ok: auditedAgents.every((agent) => agent.rules.trigger && agent.rules.lazy && agent.rules.antiBloat && agent.rules.openClawIsolation) },
     { id: "toolsets", label: "Heavy toolsets disabled", ok: auditedAgents.every((agent) => agent.missingDisabled.length === 0) },
-    { id: "coordinator-close-loop", label: "Coordinator close-loop skill disabled", ok: coordinatorCloseLoopDisabled },
-    { id: "coordinator-lean-skills", label: "Coordinator has only internal-handoff active", ok: coordinatorLean },
     { id: "legacy-skills", label: "No active legacy direct skills", ok: legacySkills.ok },
     { id: "bundled-skill-dump", label: "Global bundled skill dump disabled", ok: bundledSkills.ok },
     { id: "context-bloat-roots", label: "No searchable backup/OpenClaw/OpenDesign dumps", ok: contextSurface.ok },
@@ -3678,6 +3845,7 @@ function sendJson(res, status, payload) {
   res.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
     "Content-Length": Buffer.byteLength(body),
+    "Cache-Control": "no-store",
   });
   res.end(body);
 }
@@ -3687,33 +3855,66 @@ function parseCookies(req) {
   for (const part of String(req.headers.cookie || "").split(";")) {
     const [rawKey, ...rawValue] = part.trim().split("=");
     if (!rawKey) continue;
-    result[rawKey] = decodeURIComponent(rawValue.join("=") || "");
+    try {
+      result[rawKey] = decodeURIComponent(rawValue.join("=") || "");
+    } catch {
+      continue;
+    }
   }
   return result;
 }
 
-function isLocalRequest(req) {
-  const addr = req.socket?.remoteAddress || "";
-  return ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(addr);
-}
-
 function isAuthorizedRequest(req, url) {
   if (!WEB_SHELL_ACCESS_TOKEN) return true;
-  if (isLocalRequest(req)) return true;
+  if (isDirectLoopbackDocsRequest(req, url)) return true;
   if (url.searchParams.get("token") === WEB_SHELL_ACCESS_TOKEN) return true;
   return parseCookies(req).web_shell_token === WEB_SHELL_ACCESS_TOKEN;
 }
 
+function isDirectLoopbackDocsRequest(req, url) {
+  if (!/^\/api\/docs(?:\/|$)/.test(url.pathname)) return false;
+  const hasProxyIdentityHeader = Object.keys(req.headers).some(
+    (name) => name === "forwarded" || name === "x-real-ip" || name.startsWith("x-forwarded-"),
+  );
+  if (hasProxyIdentityHeader) return false;
+  const remote = String(req.socket?.remoteAddress || "").replace(/^::ffff:/, "").toLowerCase();
+  if (!LOOPBACK_BIND_HOSTS.has(remote)) return false;
+  try {
+    const host = new URL(`http://${String(req.headers.host || "")}`).hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    return LOOPBACK_BIND_HOSTS.has(host);
+  } catch {
+    return false;
+  }
+}
+
+function isSafeMutationOrigin(req) {
+  if (!new Set(["POST", "PUT", "PATCH", "DELETE"]).has(String(req.method || "").toUpperCase())) return true;
+  const fetchSite = String(req.headers["sec-fetch-site"] || "").toLowerCase();
+  if (fetchSite === "cross-site") return false;
+  const origin = String(req.headers.origin || "").trim();
+  if (!origin || origin === "null") return !origin;
+  try {
+    const parsed = new URL(origin);
+    const forwardedHost = String(req.headers["x-forwarded-host"] || "").split(",")[0].trim();
+    const requestHost = forwardedHost || String(req.headers.host || "").trim();
+    return ["http:", "https:"].includes(parsed.protocol) && parsed.host === requestHost;
+  } catch {
+    return false;
+  }
+}
+
 function handleAccessToken(req, res, url) {
   if (!WEB_SHELL_ACCESS_TOKEN) return true;
-  if (isLocalRequest(req)) return true;
   if (url.searchParams.get("token") === WEB_SHELL_ACCESS_TOKEN) {
     if (url.pathname.startsWith("/api/")) return true;
     url.searchParams.delete("token");
     const location = `${url.pathname}${url.search}${url.hash}` || "/";
+    const secure = req.socket?.encrypted || String(req.headers["x-forwarded-proto"] || "").toLowerCase() === "https";
     res.writeHead(302, {
-      "Set-Cookie": `web_shell_token=${encodeURIComponent(WEB_SHELL_ACCESS_TOKEN)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=31536000`,
+      "Set-Cookie": `web_shell_token=${encodeURIComponent(WEB_SHELL_ACCESS_TOKEN)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000${secure ? "; Secure" : ""}`,
       Location: location,
+      "Cache-Control": "no-store",
+      "Referrer-Policy": "no-referrer",
     });
     res.end();
     return false;
@@ -3749,19 +3950,21 @@ function readBody(req) {
 }
 
 function pushEvent(run, event) {
-  const enriched = { ts: Date.now(), ...event };
+  run.nextEventId = Number(run.nextEventId || 0) + 1;
+  const enriched = { ts: Date.now(), ...event, eventId: run.nextEventId };
   run.events.push(enriched);
   if (run.events.length > 1000) run.events.shift();
   for (const client of run.clients) {
-    client.write(`data: ${JSON.stringify(enriched)}\n\n`);
+    client.write(`id: ${enriched.eventId}\ndata: ${JSON.stringify(enriched)}\n\n`);
   }
   const warning = classifyEventWarning(enriched);
   if (warning && event.type !== "monitor.warning") {
-    const monitorEvent = { ts: Date.now(), type: "monitor.warning", warning };
+    run.nextEventId += 1;
+    const monitorEvent = { ts: Date.now(), type: "monitor.warning", warning, eventId: run.nextEventId };
     run.events.push(monitorEvent);
     if (run.events.length > 1000) run.events.shift();
     for (const client of run.clients) {
-      client.write(`data: ${JSON.stringify(monitorEvent)}\n\n`);
+      client.write(`id: ${monitorEvent.eventId}\ndata: ${JSON.stringify(monitorEvent)}\n\n`);
     }
   }
   persistRun(run);
@@ -3783,7 +3986,7 @@ function classifyEventWarning(event) {
 }
 
 function startRun({ profile, message, sessionId, toolMode, sourceSessionId, attachments }) {
-  const agent = profile || "coordinator";
+  const agent = profile || "default";
   const dir = profileDir(agent);
   if (!existsSync(dir)) {
     throw new Error(`profile not found: ${agent}`);
@@ -3810,7 +4013,7 @@ function startRun({ profile, message, sessionId, toolMode, sourceSessionId, atta
   mkdirSync(approvalDir, { recursive: true });
   const historyPath = join(approvalDir, "history.json");
   if (sourceHistory.history.length) {
-    writeFileSync(historyPath, JSON.stringify(sourceHistory.history, null, 2), "utf8");
+    atomicWriteFile(historyPath, JSON.stringify(sourceHistory.history, null, 2), { encoding: "utf8", mode: 0o600 });
   }
 
   const run = {
@@ -3826,6 +4029,7 @@ function startRun({ profile, message, sessionId, toolMode, sourceSessionId, atta
     proc: null,
     approvalDir,
     watchdog: null,
+    nextEventId: 0,
   };
   runs.set(runId, run);
 
@@ -3847,14 +4051,16 @@ function startRun({ profile, message, sessionId, toolMode, sourceSessionId, atta
     ].filter(Boolean).join(":"),
   };
 
-  const runnerArgs = [join(__dirname, "runner.py"), "--profile", agent, "--session-id", hermesSessionId, "--prompt", message];
+  const runnerArgs = [join(__dirname, "runner.py"), "--profile", agent, "--session-id", hermesSessionId, "--prompt-stdin"];
   if (sourceHistory.history.length) runnerArgs.push("--history-json", historyPath);
 
   const proc = spawn(HERMES_PYTHON, runnerArgs, {
     cwd: WORKSPACE_ROOT,
     env,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["pipe", "pipe", "pipe"],
   });
+  proc.stdin.on("error", () => {});
+  proc.stdin.end(message);
 
   run.proc = proc;
   run.status = "running";
@@ -3981,8 +4187,13 @@ const UPLOAD_MIME_EXT = {
   "application/pdf": ".pdf",
 };
 
-function readRawBody(req, maxBytes = 200 * 1024 * 1024) {
+function readRawBody(req, maxBytes = 50 * 1024 * 1024) {
   return new Promise((resolveBody, reject) => {
+    const declared = Number(req.headers["content-length"] || 0);
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      reject(new Error("upload too large"));
+      return;
+    }
     const chunks = [];
     let size = 0;
     req.on("data", (chunk) => {
@@ -4013,6 +4224,30 @@ function uploadExt(name, mime) {
 }
 
 function saveUpload({ buffer, name, mime }) {
+  const existing = readdirSync(UPLOADS_DIR)
+    .map((fileName) => {
+      const path = join(UPLOADS_DIR, fileName);
+      try {
+        const stat = statSync(path);
+        return stat.isFile() ? { path, size: stat.size, mtimeMs: stat.mtimeMs } : null;
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.mtimeMs - b.mtimeMs);
+  let totalBytes = existing.reduce((sum, file) => sum + file.size, 0);
+  while (existing.length >= MAX_UPLOAD_FILES || totalBytes + buffer.length > MAX_UPLOAD_TOTAL_BYTES) {
+    const oldest = existing.shift();
+    if (!oldest) break;
+    try {
+      unlinkSync(oldest.path);
+      totalBytes -= oldest.size;
+    } catch {}
+  }
+  if (totalBytes + buffer.length > MAX_UPLOAD_TOTAL_BYTES) {
+    throw new Error("upload storage quota exceeded");
+  }
   const ext = uploadExt(name, mime);
   const fileName = `${randomUUID().replaceAll("-", "")}${ext}`;
   writeFileSync(join(UPLOADS_DIR, fileName), buffer);
@@ -4028,18 +4263,20 @@ function saveUpload({ buffer, name, mime }) {
 function attachmentPath(url) {
   if (typeof url !== "string" || !url.startsWith("/uploads/")) return "";
   const filePath = resolve(join(UPLOADS_DIR, url.replace("/uploads/", "")));
-  return filePath.startsWith(UPLOADS_DIR) ? filePath : "";
+  return filePath.startsWith(`${UPLOADS_DIR}/`) && existsSync(filePath) && statSync(filePath).isFile() ? filePath : "";
 }
 
 function serveUpload(pathname, res) {
   const filePath = resolve(join(UPLOADS_DIR, pathname.replace("/uploads/", "")));
-  if (!filePath.startsWith(UPLOADS_DIR) || !existsSync(filePath)) {
+  if (!filePath.startsWith(`${UPLOADS_DIR}/`) || !existsSync(filePath) || !statSync(filePath).isFile()) {
     res.writeHead(404);
     res.end("Not found");
     return;
   }
   res.writeHead(200, { "Content-Type": STATIC_MIME[extname(filePath)] || "application/octet-stream" });
-  createReadStream(filePath).pipe(res);
+  const stream = createReadStream(filePath);
+  stream.on("error", () => res.destroy());
+  stream.pipe(res);
 }
 
 const FILE_SERVE_ROOTS = [
@@ -4063,31 +4300,46 @@ function serveAgentFile(rawPath, res) {
     return;
   }
   res.writeHead(200, { "Content-Type": STATIC_MIME[ext] || "application/octet-stream" });
-  createReadStream(filePath).pipe(res);
+  const stream = createReadStream(filePath);
+  stream.on("error", () => res.destroy());
+  stream.pipe(res);
 }
 
 function serveStatic(req, res) {
-  const url = new URL(req.url, `http://${req.headers.host}`);
+  const url = new URL(req.url || "/", "http://localhost");
   const pathname = url.pathname === "/" ? "/index.html" : url.pathname;
-  const filePath = resolve(join(__dirname, "public", pathname));
-  if (!filePath.startsWith(join(__dirname, "public"))) {
+  const publicRoot = resolve(join(__dirname, "public"));
+  const filePath = resolve(join(publicRoot, pathname));
+  if (!filePath.startsWith(`${publicRoot}/`)) {
     res.writeHead(403);
     res.end("Forbidden");
     return;
   }
-  if (!existsSync(filePath)) {
+  if (!existsSync(filePath) || !statSync(filePath).isFile()) {
     res.writeHead(404);
     res.end("Not found");
     return;
   }
   res.writeHead(200, { "Content-Type": STATIC_MIME[extname(filePath)] || "application/octet-stream" });
-  createReadStream(filePath).pipe(res);
+  const stream = createReadStream(filePath);
+  stream.on("error", () => res.destroy());
+  stream.pipe(res);
 }
 
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host}`);
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+  res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
+  res.setHeader("Permissions-Policy", "camera=(), geolocation=(), microphone=()");
   try {
+    const url = new URL(req.url || "/", "http://localhost");
     if (!handleAccessToken(req, res, url)) return;
+    if (!isSafeMutationOrigin(req)) {
+      sendJson(res, 403, { error: "cross-site request blocked" });
+      return;
+    }
 
     if (req.method === "GET" && url.pathname === "/api/agents") {
       sendJson(res, 200, { agents: listAgents() });
@@ -4160,13 +4412,13 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && url.pathname === "/api/models") {
-      sendJson(res, 200, modelSettingsAll());
+      sendJson(res, 200, await modelSettingsAll());
       return;
     }
 
     if (req.method === "POST" && url.pathname === "/api/models") {
       const body = await readBody(req);
-      sendJson(res, 200, saveModelSettings(body.models || {}));
+      sendJson(res, 200, await saveModelSettings(body.models || {}));
       return;
     }
 
@@ -4364,7 +4616,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && agentLogsMatch) {
       const lines = Number(url.searchParams.get("lines") || 220);
       const path = join(profileDir(agentLogsMatch[1]), "logs", "gateway.log");
-      sendJson(res, 200, { path, text: tailLines(path, Math.min(Math.max(lines, 20), 1000)) });
+      sendJson(res, 200, { path, text: redactSensitiveText(tailLines(path, Math.min(Math.max(lines, 20), 1000))) });
       return;
     }
 
@@ -4594,7 +4846,18 @@ const server = http.createServer(async (req, res) => {
         "Cache-Control": "no-cache",
         Connection: "keep-alive",
       });
-      for (const event of run.events) res.write(`data: ${JSON.stringify(event)}\n\n`);
+      const requestedAfter = Number(url.searchParams.get("after") || 0);
+      const headerAfter = Number(req.headers["last-event-id"] || 0);
+      const after = Math.max(Number.isFinite(requestedAfter) ? requestedAfter : 0, Number.isFinite(headerAfter) ? headerAfter : 0);
+      for (const event of run.events) {
+        const eventId = Number(event.eventId || 0);
+        if (eventId && eventId <= after) continue;
+        res.write(`${eventId ? `id: ${eventId}\n` : ""}data: ${JSON.stringify(event)}\n\n`);
+      }
+      if (["completed", "failed", "stopped", "interrupted"].includes(run.status)) {
+        res.end();
+        return;
+      }
       run.clients.add(res);
       req.on("close", () => run.clients.delete(res));
       return;
@@ -4614,11 +4877,16 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const approvalId = String(body.approvalId || "");
-      if (!approvalId) {
-        sendJson(res, 400, { error: "approvalId is required" });
+      if (!/^[A-Za-z0-9_-]{1,128}$/.test(approvalId)) {
+        sendJson(res, 400, { error: "invalid approvalId" });
         return;
       }
-      writeFileSync(join(run.approvalDir, `${approvalId}.json`), JSON.stringify({ decision }), "utf8");
+      const approvalPath = resolve(join(run.approvalDir, `${approvalId}.json`));
+      if (!approvalPath.startsWith(`${resolve(run.approvalDir)}/`)) {
+        sendJson(res, 400, { error: "invalid approvalId" });
+        return;
+      }
+      atomicWriteFile(approvalPath, JSON.stringify({ decision }), { encoding: "utf8", mode: 0o600 });
       pushEvent(run, { type: "approval.sent", approvalId, decision });
       sendJson(res, 200, { ok: true });
       return;

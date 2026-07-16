@@ -77,6 +77,8 @@ def patch_adapter(root: Path) -> None:
 
     def _merge_pending_photo_batches_into_text_event(self, text_key: str, event: MessageEvent) -> None:
         """Merge queued Telegram photo bursts/albums into a matching text event."""
+        if not self._looks_like_image_task_text(getattr(event, "text", "") or ""):
+            return
         prefixes = (f"{text_key}:photo-burst", f"{text_key}:album:")
         for batch_key, pending in list(self._pending_photo_batches.items()):
             if not (batch_key == prefixes[0] or batch_key.startswith(prefixes[1])):
@@ -142,17 +144,11 @@ def patch_adapter(root: Path) -> None:
         "text flush image-task hold",
     )
 
-    text = replace_once(
-        text,
-        """    def _enqueue_photo_event(self, batch_key: str, event: MessageEvent) -> None:
-        \"\"\"Merge photo events into a pending batch and schedule flush.\"\"\"
-        existing = self._pending_photo_batches.get(batch_key)
-""",
-        """    def _enqueue_photo_event(self, batch_key: str, event: MessageEvent) -> None:
-        \"\"\"Merge photo events into a pending batch and schedule flush.\"\"\"
-        text_key = self._text_batch_key(event)
+    photo_merge = """        text_key = self._text_batch_key(event)
         pending_text = self._pending_text_batches.get(text_key)
-        if pending_text is not None:
+        if pending_text is not None and self._looks_like_image_task_text(
+            getattr(pending_text, "text", "") or ""
+        ):
             if event.media_urls:
                 pending_text.media_urls.extend(event.media_urls)
                 pending_text.media_types.extend(event.media_types)
@@ -165,17 +161,22 @@ def patch_adapter(root: Path) -> None:
                 self._flush_text_batch(text_key)
             )
             logger.info(
-                "[Telegram] Merged photo batch %s into pending text batch %s (%d image(s))",
+                "[Telegram] Merged photo batch %s into pending image-task text batch %s (%d image(s))",
                 batch_key,
                 text_key,
                 len(event.media_urls or []),
             )
             return
 
-        existing = self._pending_photo_batches.get(batch_key)
-""",
-        "photo enqueue pending-text merge",
-    )
+"""
+
+    if photo_merge not in text:
+        marker = "        existing = self._pending_photo_batches.get(batch_key)\n"
+        enqueue_at = text.find("    def _enqueue_photo_event(")
+        marker_at = text.find(marker, enqueue_at)
+        if enqueue_at < 0 or marker_at < 0:
+            fail("Could not patch photo enqueue pending-text merge: expected source block not found")
+        text = text[:marker_at] + photo_merge + text[marker_at:]
 
     path.write_text(text, encoding="utf-8")
 

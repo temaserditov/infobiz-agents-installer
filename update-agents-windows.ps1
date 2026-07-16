@@ -12,7 +12,10 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     Write-Host "Открываю 64-bit PowerShell для обновления..." -ForegroundColor Gray
     $tmpScript = Join-Path $env:TEMP ("infobiz-agents-update-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".ps1")
     Invoke-WebRequest -Uri ("https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/update-agents-windows.ps1?cb=" + (Get-Date -Format "yyyyMMddHHmmss")) -OutFile $tmpScript
-    & $powershell64 -NoProfile -ExecutionPolicy Bypass -File $tmpScript
+    $childArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $tmpScript)
+    if ($Server) { $childArgs += @("-Server", $Server) }
+    if ($User) { $childArgs += @("-User", $User) }
+    & $powershell64 @childArgs
     exit $LASTEXITCODE
   }
 }
@@ -49,7 +52,7 @@ if (-not $ssh) {
 }
 
 $remote = @'
-VERSION='0.1.0' BASE_URL='https://github.com/temaserditov/infobiz-agents-installer/releases/download/v0.1.0' bash -lc 'tmp=/tmp/update-vps-infobiz-agents.sh; curl -fsSL https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/update-vps-infobiz-agents.sh -o $tmp; chmod +x $tmp; $tmp'
+VERSION='0.1.0' BASE_URL='https://github.com/temaserditov/infobiz-agents-installer/releases/download/v0.1.0' bash -lc 'set -euo pipefail; tmp=$(mktemp /tmp/infobiz-update.XXXXXX); trap '"'"'rm -f "$tmp"'"'"' EXIT; curl -fsSL https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/update-vps-infobiz-agents.sh -o "$tmp"; chmod 700 "$tmp"; "$tmp"'
 '@
 
 Write-Host ""
@@ -58,7 +61,7 @@ Write-Host "SSH-клиент: $ssh" -ForegroundColor Gray
 Write-Host "Windows попросит пароль от VPS. При вводе пароль может не отображаться — это нормально." -ForegroundColor Gray
 Write-Host ""
 
-& $ssh -tt $Server $remote
+& $ssh -tt -o StrictHostKeyChecking=accept-new $Server $remote
 
 if ($LASTEXITCODE -ne 0) {
   Write-Host ""

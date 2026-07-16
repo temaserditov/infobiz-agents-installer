@@ -24,6 +24,18 @@ def patch_openai_codex(root: Path) -> None:
         fail(f"OpenAI Codex image provider not found: {path}")
     text = path.read_text(encoding="utf-8")
 
+    # Hermes 0.18.2+ supports image_url/reference_image_urls natively on the
+    # Codex OAuth path. Do not rewrite that implementation with the legacy
+    # compatibility patch: the upstream payload now accepts normalized
+    # input_images and already validates local files/data URLs itself.
+    if (
+        "def _normalize_input_images(" in text
+        and "input_images: Optional[List[Dict[str, str]]]" in text
+        and "reference_image_urls" in text
+        and 'content.extend(input_images)' in text
+    ):
+        return
+
     if "import base64\n" not in text:
         text = text.replace("import json\n", "import json\nimport base64\n", 1)
     if "import mimetypes\n" not in text:
@@ -425,8 +437,22 @@ def main() -> int:
     root = Path(root_arg).expanduser().resolve()
     if not root.exists():
         fail(f"Hermes agent root does not exist: {root}")
-    patch_openai_codex(root)
-    patch_image_tool(root)
+    provider_path = root / "plugins/image_gen/openai-codex/__init__.py"
+    tool_path = root / "tools/image_generation_tool.py"
+    originals = {
+        provider_path: provider_path.read_text(encoding="utf-8") if provider_path.exists() else None,
+        tool_path: tool_path.read_text(encoding="utf-8") if tool_path.exists() else None,
+    }
+    try:
+        patch_openai_codex(root)
+        patch_image_tool(root)
+    except BaseException:
+        # Keep the source tree transactional. A future upstream formatting
+        # change must not leave half of Hermes patched and half untouched.
+        for path, original in originals.items():
+            if original is not None:
+                path.write_text(original, encoding="utf-8")
+        raise
     print(f"Patched Hermes image reference support in {root}")
     return 0
 

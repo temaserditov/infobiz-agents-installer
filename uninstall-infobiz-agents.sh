@@ -8,6 +8,20 @@ CONFIG_DIR="$HOME/.infobiz-agents"
 HERMES_ROOT="$HOME/.hermes"
 LOCAL_BIN="$HOME/.local/bin"
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
+RESTORED_PREVIOUS_HERMES=0
+UV_INSTALLED_PATH=""
+NODE_INSTALLED_BY_INFOBIZ=0
+if [[ -f "$INSTALL_ROOT/.uv-installed-by-infobiz" ]]; then
+  UV_INSTALLED_PATH="$(/usr/bin/head -n 1 "$INSTALL_ROOT/.uv-installed-by-infobiz" 2>/dev/null || true)"
+fi
+if [[ -f "$INSTALL_ROOT/.node-installed-by-infobiz" ]]; then
+  NODE_INSTALLED_BY_INFOBIZ=1
+else
+  for command_name in node npm npx; do
+    target="$(/usr/bin/readlink "$LOCAL_BIN/$command_name" 2>/dev/null || true)"
+    [[ "$target" == "$HERMES_ROOT/node/"* ]] && NODE_INSTALLED_BY_INFOBIZ=1
+  done
+fi
 
 say_step() {
   printf "==> %s\n" "$1"
@@ -19,6 +33,18 @@ remove_path() {
     /bin/rm -rf "$target"
     printf "removed %s\n" "$target"
   fi
+}
+
+is_restore_eligible_backup() {
+  local candidate="$1" profile
+  [[ -f "$candidate/.infobiz-restore-eligible" ]] && return 0
+  [[ -d "$candidate/hermes-agent" ]] || return 1
+  [[ "$(/bin/cat "$candidate/hermes-agent/.install_method" 2>/dev/null || true)" == "managed-runtime" ]] && return 1
+  [[ -f "$candidate/hermes-agent/.infobiz-upstream-ref" ]] && return 1
+  for profile in marketer copywriter designer tech; do
+    [[ -d "$candidate/profiles/$profile" ]] && return 1
+  done
+  return 0
 }
 
 bootout_plist() {
@@ -63,14 +89,44 @@ remove_path "$CONFIG_DIR"
 
 say_step "Removing Hermes installed by test installers"
 remove_path "$HERMES_ROOT"
-for backup in "$HOME"/.hermes.backup.*; do
-  remove_path "$backup"
-done
+latest_backup=""
+while IFS= read -r candidate; do
+  [[ -n "$candidate" && -d "$candidate" ]] || continue
+  if is_restore_eligible_backup "$candidate"; then
+    latest_backup="$candidate"
+    break
+  fi
+done < <(/usr/bin/find "$HOME" -maxdepth 1 -type d -name '.hermes.backup.*' -print | /usr/bin/sort -r)
+if [[ -n "$latest_backup" && -d "$latest_backup" ]]; then
+  /bin/mv "$latest_backup" "$HERMES_ROOT"
+  RESTORED_PREVIOUS_HERMES=1
+  printf "restored previous Hermes from %s\n" "$latest_backup"
+fi
 
 say_step "Removing Hermes command shims created by installers"
 remove_path "$LOCAL_BIN/hermes"
 remove_path "$LOCAL_BIN/hermes-agent"
 remove_path "$LOCAL_BIN/tirith"
+if [[ "$NODE_INSTALLED_BY_INFOBIZ" == "1" ]]; then
+  remove_path "$LOCAL_BIN/node"
+  remove_path "$LOCAL_BIN/npm"
+  remove_path "$LOCAL_BIN/npx"
+fi
+
+case "$UV_INSTALLED_PATH" in
+  "$HOME/.local/bin/uv"|"$HOME/.cargo/bin/uv")
+    remove_path "$UV_INSTALLED_PATH"
+    remove_path "${UV_INSTALLED_PATH%/uv}/uvx"
+    ;;
+esac
+
+if [[ "$RESTORED_PREVIOUS_HERMES" == "1" ]]; then
+  /bin/mkdir -p "$LOCAL_BIN"
+  [[ -x "$HERMES_ROOT/hermes-agent/venv/bin/hermes" ]] && /bin/ln -sf "$HERMES_ROOT/hermes-agent/venv/bin/hermes" "$LOCAL_BIN/hermes"
+  for command_name in node npm npx; do
+    [[ -x "$HERMES_ROOT/node/bin/$command_name" ]] && /bin/ln -sf "$HERMES_ROOT/node/bin/$command_name" "$LOCAL_BIN/$command_name"
+  done
+fi
 
 say_step "Removing old DMG quarantine leftovers"
 /usr/bin/xattr -dr com.apple.quarantine "$INSTALL_ROOT" "$CONFIG_DIR" "$HERMES_ROOT" >/dev/null 2>&1 || true
@@ -78,12 +134,16 @@ say_step "Removing old DMG quarantine leftovers"
 
 say_step "Removing PATH entries added by installers"
 for rc in "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.bash_profile" "$HOME/.bashrc"; do
-  [[ -f "$rc" ]] || continue
+  [[ -f "$rc" && ! -L "$rc" ]] || continue
   if /usr/bin/grep -Fq 'Infobiz Agents: ensure' "$rc" 2>/dev/null; then
-    /usr/bin/grep -v -F \
-      -e '# Infobiz Agents: ensure ~/.local/bin (hermes) on PATH' \
-      -e 'export PATH="$HOME/.local/bin:$PATH"' \
-      "$rc" > "$rc.infobiz.tmp" && /bin/mv "$rc.infobiz.tmp" "$rc"
+    rc_tmp="$(/usr/bin/mktemp "$rc.infobiz.XXXXXX")"
+    /usr/bin/awk '
+      $0 == "# Infobiz Agents: ensure ~/.local/bin (hermes) on PATH" { next }
+      $0 == "export PATH=\"$HOME/.local/bin:$PATH\"" { next }
+      { print }
+    ' "$rc" > "$rc_tmp"
+    /bin/chmod "$(/usr/bin/stat -f '%Lp' "$rc")" "$rc_tmp"
+    /bin/mv "$rc_tmp" "$rc"
     printf "cleaned PATH entry from %s\n" "$rc"
   fi
 done

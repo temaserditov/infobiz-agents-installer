@@ -1,4 +1,11 @@
 const BASE_URL = process.env.AGENT_SHELL_URL || "http://127.0.0.1:8787";
+const ACCESS_TOKEN = String(process.env.WEB_SHELL_ACCESS_TOKEN || "").trim();
+
+function endpoint(path) {
+  const url = new URL(path, `${BASE_URL.replace(/\/$/, "")}/`);
+  if (ACCESS_TOKEN) url.searchParams.set("token", ACCESS_TOKEN);
+  return url;
+}
 
 const checks = [
   { name: "control-center", path: "/api/control-center", ok: (data) => typeof data.ok === "boolean" && Array.isArray(data.checks) },
@@ -31,7 +38,7 @@ const checks = [
 ];
 
 async function readJson(path) {
-  const response = await fetch(`${BASE_URL}${path}`);
+  const response = await fetch(endpoint(path));
   if (!response.ok) {
     throw new Error(`${path} returned HTTP ${response.status}`);
   }
@@ -39,7 +46,7 @@ async function readJson(path) {
 }
 
 async function postJson(path, payload) {
-  const response = await fetch(`${BASE_URL}${path}`, {
+  const response = await fetch(endpoint(path), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -62,19 +69,19 @@ for (const check of checks) {
 }
 
 try {
-  const safe = await postJson("/api/agents/coordinator/preflight", { message: "запиши короткую заметку в obsidian" });
+  const safe = await postJson("/api/agents/default/preflight", { message: "запиши короткую заметку в obsidian" });
   if (!safe.promptRisk?.hits?.includes("obsidian")) failures.push("preflight-safe: missing obsidian risk hint");
   else console.log("ok preflight-safe");
-  const risky = await postJson("/api/agents/coordinator/preflight", { message: "открой сайт и закажи курьера" });
+  const risky = await postJson("/api/agents/default/preflight", { message: "открой сайт и закажи курьера" });
   if (risky.ok !== false || !risky.promptRisk?.blockers?.includes("browser")) failures.push("preflight-risky: missing browser blocker");
   else console.log("ok preflight-risky");
-  const roleRisk = await postJson("/api/agents/coordinator/preflight", { message: "сгенерируй картинку для поста" });
+  const roleRisk = await postJson("/api/agents/tech/preflight", { message: "сгенерируй картинку для поста" });
   if (roleRisk.ok !== false || !roleRisk.roleRisk?.blockers?.includes("media-gen")) failures.push("preflight-role-risk: missing media-gen role blocker");
   else console.log("ok preflight-role-risk");
-  const routed = await postJson("/api/prompt-router", { message: "запиши короткую заметку в obsidian", selected: "coordinator" });
+  const routed = await postJson("/api/prompt-router", { message: "запиши короткую заметку в obsidian", selected: "default" });
   if (!routed.recommended?.id || !Array.isArray(routed.candidates)) failures.push("prompt-router: bad response");
   else console.log("ok prompt-router");
-  const preflightRoute = await postJson("/api/agents/coordinator/preflight", { message: "запиши короткую заметку в obsidian" });
+  const preflightRoute = await postJson("/api/agents/default/preflight", { message: "запиши короткую заметку в obsidian" });
   if (!preflightRoute.routing?.recommended?.id) failures.push("preflight-routing: missing routing");
   else console.log("ok preflight-routing");
   if (!preflightRoute.limits?.bloatTokenLimit || !preflightRoute.roleRisk) failures.push("preflight-guard-shape: bad response");

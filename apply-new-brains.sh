@@ -3,10 +3,11 @@ set -euo pipefail
 
 # apply-new-brains.sh
 # Накатывает ТОЛЬКО свежие мозги агентов (SOUL / IDENTITY / AGENTS / knowledge /
-# curated skills) на уже установленный Infobiz-пак.
+# скиллы, которые принадлежат поставке) на уже установленный Infobiz-пак.
 #
 # Что НЕ трогает: память (memories/), сессии (sessions/), ключи (.env, auth.json),
-# config.yaml, state.db, кэши, cron, сидовые Hermes-скиллы, WebShell.
+# config.yaml, state.db, кэши, cron, рабочие файлы, пользовательские и премиум-
+# скиллы, WebShell.
 #
 # Накат идёт overlay-ом (rsync без --delete): перезаписываются только мозговые
 # файлы, всё остальное в профиле остаётся как было. Перед накатом — бэкап мозгов.
@@ -55,9 +56,14 @@ SRC="$WORK/profile/agents"
 
 # Что НЕ перезаписываем в профиле (user-data + runtime)
 EXCL=(--exclude '.env' --exclude '.env.EXAMPLE' --exclude 'auth.json' --exclude 'auth.lock' \
+      --exclude '.env.*' --exclude 'auth.json.*' --exclude 'config.yaml.*' \
       --exclude 'config.yaml' --exclude 'sessions/' --exclude 'memories/' --exclude 'logs/' \
       --exclude 'cache/' --exclude 'audio_cache/' --exclude 'image_cache/' --exclude 'document_cache/' \
       --exclude 'cron/' --exclude 'hooks/' --exclude 'pairing/' --exclude 'sandboxes/' \
+      --exclude 'home/' --exclude 'workspace/' --exclude 'plans/' --exclude 'local/' \
+      --exclude 'MEMORY.md' --exclude 'USER.md' --exclude 'LEARNING.md' \
+      --exclude 'skills/' --exclude 'response_store.db' --exclude 'response_store.db-shm' \
+      --exclude 'response_store.db-wal' --exclude '.restart_last_processed.json' \
       --exclude 'state.db' --exclude 'state.db-shm' --exclude 'state.db-wal' \
       --exclude 'gateway.pid' --exclude 'gateway.lock' --exclude 'gateway_state.json' \
       --exclude '.skills_prompt_snapshot.json' --exclude 'models_dev_cache.json' \
@@ -87,7 +93,21 @@ for role in "${PROFILES[@]}"; do
 
   printf "  мозги -> %s\n" "$role"
   /usr/bin/rsync "${RSYNC_FLAGS[@]}" "${EXCL[@]}" "$src/" "$dst/" | sed 's/^/      /'
-  /usr/bin/xattr -dr com.apple.quarantine "$dst" >/dev/null 2>&1 || true
+
+  # Обновляем только те скиллы, которые явно входят в пакет. Неизвестные
+  # каталоги в skills/ считаем пользовательскими и никогда не удаляем.
+  if [[ -d "$src/skills" ]]; then
+    /bin/mkdir -p "$dst/skills"
+    for packaged_skill in "$src"/skills/*(/N); do
+      skill_name="${packaged_skill:t}"
+      printf "  скилл -> %s/%s\n" "$role" "$skill_name"
+      /usr/bin/rsync "${RSYNC_FLAGS[@]}" "$packaged_skill/" "$dst/skills/$skill_name/" | sed 's/^/      /'
+    done
+  fi
+
+  if [[ "$DRY_RUN" != "1" ]]; then
+    /usr/bin/xattr -dr com.apple.quarantine "$dst" >/dev/null 2>&1 || true
+  fi
   updated+=("$role")
 done
 
