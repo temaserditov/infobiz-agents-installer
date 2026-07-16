@@ -56,6 +56,7 @@ forbidden_names = {
     "response_store.db", "response_store.db-shm", "response_store.db-wal",
     "gateway.pid", "gateway.lock", "gateway_state.json",
     ".restart_last_processed.json",
+    ".skills_prompt_snapshot.json",
 }
 forbidden_dirs = {
     "sessions", "memories", "logs", "cache", "audio_cache", "image_cache",
@@ -68,7 +69,7 @@ for path in payload.rglob("*"):
     rel = path.relative_to(payload)
     if path.name.startswith("._") or path.name == ".DS_Store":
         errors.append(f"macOS metadata leaked: {rel}")
-    if path.name in forbidden_names or path.name.startswith((".env.", "auth.json.", "config.yaml.", ".restart")):
+    if path.name in forbidden_names or path.name.startswith((".env.", "auth.json.", "config.yaml.", ".restart", ".skills_prompt_snapshot.json.")):
         errors.append(f"runtime/secret file leaked: {rel}")
     if path.is_dir() and path.name in forbidden_dirs:
         errors.append(f"runtime directory leaked: {rel}")

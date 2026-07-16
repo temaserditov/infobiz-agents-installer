@@ -278,6 +278,8 @@ copy_agent() {
     --exclude '.curator_state' \
     --exclude '.curator_backups' \
     --exclude '.bundled_manifest' \
+    --exclude '.skills_prompt_snapshot.json' \
+    --exclude '.skills_prompt_snapshot.json.*' \
     --exclude '.usage.json' \
     --exclude '.usage.json.lock' \
     --exclude '.update_check' \
