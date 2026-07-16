@@ -49,6 +49,8 @@ This verifies the running local shell health endpoints without starting any agen
 - `GET /api/disabled-skills` - inventory of skills moved into `.disabled-skills`.
 - `GET /api/rule-audit` - scans SOUL and active skills for eager-tool and legacy instructions.
 - `GET /api/model-matrix` - provider/model/retry/session warning matrix.
+- `GET /api/voice` - global speech-to-text policy and its state across all installed agents.
+- `POST /api/voice` - saves one Hermes/Groq speech-to-text policy for current and future agents.
 - `GET /api/config-drift` - read-only config drift against the common profile shape.
 - `GET /api/baseline` - drift against the saved hygiene baseline.
 - `POST /api/baseline` - saves the current hygiene state as baseline.

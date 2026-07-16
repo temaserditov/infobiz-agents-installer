@@ -34,6 +34,7 @@ const checks = [
   { name: "export", path: "/api/export", ok: (data) => typeof data.controlCenter?.ok === "boolean" && Array.isArray(data.nextFixes?.fixes) && Array.isArray(data.profileFootprint?.profiles) },
   { name: "inventory", path: "/api/inventory", ok: (data) => data.totals && Array.isArray(data.profiles) && data.profiles.every((profile) => (profile.archives || []).every((archive) => archive.path.includes("/.archives/"))) },
   { name: "config-drift", path: "/api/config-drift", ok: (data) => data.totals && Array.isArray(data.profiles) },
+  { name: "global-voice", path: "/api/voice", ok: (data) => data.ok === true && data.global && Array.isArray(data.profiles) && Array.isArray(data.options) },
   { name: "preflights", path: "/api/preflights", ok: (data) => data.stats && Array.isArray(data.preflights) },
 ];
 

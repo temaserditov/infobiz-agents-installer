@@ -32,6 +32,8 @@ const BASELINE_PATH = join(__dirname, "baseline.json");
 const OVERRIDES_PATH = join(__dirname, "agent-overrides.json");
 const GROUPS_PATH = join(__dirname, "groups.json");
 const DOCS_PATH = join(__dirname, "docs.json");
+const INFOBIZ_CONFIG_DIR = process.env.INFOBIZ_CONFIG_DIR || join(HOME_DIR, ".infobiz-agents");
+const VOICE_POLICY_PATH = process.env.INFOBIZ_VOICE_POLICY_PATH || join(INFOBIZ_CONFIG_DIR, "voice-policy.json");
 const PUBLIC_AVATARS_DIR = join(__dirname, "public", "assets", "avatars");
 
 mkdirSync(RUNS_DIR, { recursive: true });
@@ -1437,6 +1439,71 @@ function validateGroqSttModel(model) {
   return value;
 }
 
+function voiceAgentIds() {
+  return listAgents().map((agent) => agent.id);
+}
+
+function readVoicePolicy() {
+  const raw = readJson(VOICE_POLICY_PATH, null);
+  if (!raw || typeof raw !== "object" || Number(raw.version) !== 1) return null;
+  try {
+    const provider = validateSttProvider(raw.provider);
+    const groqModel = validateGroqSttModel(raw.groqModel);
+    const groqApiKey = provider === "groq" ? validateGroqApiKey(raw.groqApiKey) : "";
+    if (provider === "groq" && !groqApiKey) return null;
+    return { version: 1, provider, groqModel, groqApiKey };
+  } catch {
+    return null;
+  }
+}
+
+function writeVoicePolicy({ provider, groqModel, groqApiKey }) {
+  const policy = {
+    version: 1,
+    provider: validateSttProvider(provider),
+    groqModel: validateGroqSttModel(groqModel),
+    groqApiKey: "",
+    updatedAt: new Date().toISOString(),
+  };
+  if (policy.provider === "groq") {
+    policy.groqApiKey = validateGroqApiKey(groqApiKey);
+    if (!policy.groqApiKey) throw new Error("Groq API key is required");
+  }
+  atomicWriteFile(VOICE_POLICY_PATH, `${JSON.stringify(policy, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  return policy;
+}
+
+function uniformVoicePolicy() {
+  const ids = voiceAgentIds();
+  if (!ids.length) return null;
+  const settings = ids.map((id) => voiceSettings(id));
+  const groqProfiles = settings.filter((item) => item.provider === "groq" && item.groqConfigured);
+  if (groqProfiles.length) {
+    const groqIds = new Set(groqProfiles.map((item) => item.profile));
+    const keys = [...new Set(ids
+      .filter((id) => groqIds.has(id))
+      .map((id) => readEnvValue(readText(envPath(id), ""), "GROQ_API_KEY"))
+      .filter(Boolean))];
+    const models = [...new Set(groqProfiles.map((item) => item.groqModel || GROQ_STT_MODEL_FALLBACK))];
+    if (keys.length === 1 && models.length === 1) {
+      return { version: 1, provider: "groq", groqModel: models[0], groqApiKey: keys[0] };
+    }
+    return null;
+  }
+  const providers = [...new Set(settings.map((item) => item.provider))];
+  if (providers.length === 1 && providers[0] === "local") {
+    return { version: 1, provider: "local", groqModel: GROQ_STT_MODEL_FALLBACK, groqApiKey: "" };
+  }
+  return null;
+}
+
+function ensureVoicePolicy() {
+  const saved = readVoicePolicy();
+  if (saved) return saved;
+  const migrated = uniformVoicePolicy();
+  return migrated ? writeVoicePolicy(migrated) : null;
+}
+
 function voiceSettings(agentId) {
   const env = readText(envPath(agentId), "");
   const stt = sttConfigSummary(agentId);
@@ -1464,21 +1531,32 @@ function voiceSettings(agentId) {
 }
 
 function voiceSettingsAll() {
-  const profiles = PROFILE_ORDER
-    .filter((id) => existsSync(profileDir(id)))
-    .map((id) => voiceSettings(id));
+  const policy = ensureVoicePolicy();
+  const syncResults = policy ? applyVoicePolicy(policy) : [];
+  const profiles = voiceAgentIds().map((id) => voiceSettings(id));
   const providers = [...new Set(profiles.map((profile) => profile.provider))];
+  const globalProvider = policy?.provider || (providers.length === 1 ? providers[0] : "mixed");
+  const globalGroqKey = policy?.groqApiKey || "";
   return {
     ok: true,
     options: STT_PROVIDER_OPTIONS,
     groqModels: GROQ_STT_MODEL_OPTIONS,
     groqFallbackModel: GROQ_STT_MODEL_FALLBACK,
-    provider: providers.length === 1 ? providers[0] : "mixed",
-    providerLabel: providers.length === 1 ? sttProviderLabel(providers[0]) : "Разные",
+    provider: globalProvider,
+    providerLabel: globalProvider === "mixed" ? "Разные" : sttProviderLabel(globalProvider),
+    global: {
+      configured: Boolean(policy),
+      provider: globalProvider,
+      providerLabel: globalProvider === "mixed" ? "Разные" : sttProviderLabel(globalProvider),
+      groqModel: policy?.groqModel || GROQ_STT_MODEL_FALLBACK,
+      groqConfigured: globalProvider === "groq" && Boolean(globalGroqKey),
+      groqKeyPreview: groqKeyPreview(globalGroqKey),
+    },
     profiles,
     groqEnabled: profiles.filter((profile) => profile.provider === "groq").length,
     groqConfigured: profiles.filter((profile) => profile.provider === "groq" && profile.groqConfigured).length,
     total: profiles.length,
+    syncResults,
   };
 }
 
@@ -1578,32 +1656,39 @@ function saveVoiceSetting(agentId, { provider, groqApiKey, updateGroqApiKey = fa
   };
 }
 
-function saveVoiceSettings({ provider, groqApiKey, updateGroqApiKey = false, groqModel, agentIds = null } = {}) {
-  const allowed = new Set(PROFILE_ORDER);
-  const targets = (Array.isArray(agentIds) && agentIds.length ? agentIds : PROFILE_ORDER)
-    .map((id) => String(id || "").trim())
-    .filter((id) => allowed.has(id) && existsSync(profileDir(id)));
+function voiceMatchesPolicy(agentId, policy) {
+  const current = voiceSettings(agentId);
+  const currentKey = readEnvValue(readText(envPath(agentId), ""), "GROQ_API_KEY");
+  if (current.provider !== policy.provider) return false;
+  if (policy.provider === "local") return !currentKey;
+  return current.groqModel === policy.groqModel && currentKey === policy.groqApiKey;
+}
+
+function applyVoicePolicy(policy) {
   const results = [];
-  for (const agentId of targets) {
-    const before = voiceSettings(agentId);
-    const normalizedProvider = validateSttProvider(provider);
-    const normalizedModel = validateGroqSttModel(groqModel);
-    if (
-      normalizedProvider === before.provider &&
-      (normalizedProvider !== "local" || !before.groqConfigured) &&
-      (normalizedProvider !== "groq" || before.groqModel === normalizedModel) &&
-      (normalizedProvider !== "groq" || before.groqConfigured || updateGroqApiKey) &&
-      (!updateGroqApiKey || !groqApiKey)
-    ) {
-      continue;
-    }
+  for (const agentId of voiceAgentIds()) {
+    if (voiceMatchesPolicy(agentId, policy)) continue;
     results.push(saveVoiceSetting(agentId, {
-      provider: normalizedProvider,
-      groqApiKey,
-      updateGroqApiKey,
-      groqModel: normalizedModel,
+      provider: policy.provider,
+      groqApiKey: policy.groqApiKey,
+      updateGroqApiKey: policy.provider === "groq",
+      groqModel: policy.groqModel,
     }));
   }
+  return results;
+}
+
+function saveVoiceSettings({ provider, groqApiKey, updateGroqApiKey = false, groqModel } = {}) {
+  const previous = readVoicePolicy() || uniformVoicePolicy();
+  const normalizedProvider = validateSttProvider(provider);
+  const normalizedModel = validateGroqSttModel(groqModel);
+  let normalizedKey = "";
+  if (normalizedProvider === "groq") {
+    normalizedKey = updateGroqApiKey ? validateGroqApiKey(groqApiKey) : previous?.groqApiKey || "";
+    if (!normalizedKey) throw new Error("Вставь Groq API key");
+  }
+  const policy = writeVoicePolicy({ provider: normalizedProvider, groqModel: normalizedModel, groqApiKey: normalizedKey });
+  const results = applyVoicePolicy(policy);
   return { ok: true, settings: voiceSettingsAll(), results };
 }
 
@@ -4434,7 +4519,6 @@ const server = http.createServer(async (req, res) => {
         groqApiKey: String(body.groqApiKey || "").trim(),
         updateGroqApiKey: Object.prototype.hasOwnProperty.call(body, "groqApiKey") && String(body.groqApiKey || "").trim().length > 0,
         groqModel: body.groqModel,
-        agentIds: Array.isArray(body.agentIds) ? body.agentIds : null,
       }));
       return;
     }
@@ -4646,23 +4730,6 @@ const server = http.createServer(async (req, res) => {
         allowedUsers: body.allowedUsers,
         updateToken: Object.prototype.hasOwnProperty.call(body, "token"),
         updateAllowedUsers: Object.prototype.hasOwnProperty.call(body, "allowedUsers"),
-      }));
-      return;
-    }
-
-    const agentVoiceMatch = url.pathname.match(/^\/api\/agents\/([^/]+)\/voice$/);
-    if (req.method === "GET" && agentVoiceMatch) {
-      sendJson(res, 200, voiceSettings(agentVoiceMatch[1]));
-      return;
-    }
-
-    if (req.method === "POST" && agentVoiceMatch) {
-      const body = await readBody(req);
-      sendJson(res, 200, saveVoiceSetting(agentVoiceMatch[1], {
-        provider: body.provider,
-        groqApiKey: String(body.groqApiKey || "").trim(),
-        updateGroqApiKey: Object.prototype.hasOwnProperty.call(body, "groqApiKey") && String(body.groqApiKey || "").trim().length > 0,
-        groqModel: body.groqModel,
       }));
       return;
     }

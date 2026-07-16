@@ -74,7 +74,7 @@ const state = {
     agentId: "",
   },
   voiceModal: {
-    agentId: "",
+    open: false,
   },
 };
 
@@ -200,7 +200,6 @@ const els = {
   voiceGroqFields: document.querySelector("#voiceGroqFields") || nullEl,
   voiceModalGroqKey: document.querySelector("#voiceModalGroqKey") || nullEl,
   voiceModalGroqModel: document.querySelector("#voiceModalGroqModel") || nullEl,
-  voiceModalApplyAll: document.querySelector("#voiceModalApplyAll") || nullEl,
   voiceModalHint: document.querySelector("#voiceModalHint") || nullEl,
   voiceModalError: document.querySelector("#voiceModalError") || nullEl,
   brandTitle: document.querySelector("#brandTitle") || nullEl,
@@ -860,7 +859,6 @@ function controlAgentMeta(agent) {
   const healthAgent = (state.health?.agents || []).find((item) => item.id === agent.id);
   const telegram = (state.telegramSettings?.profiles || []).find((item) => item.profile === agent.id);
   const model = (state.modelSettings?.profiles || []).find((item) => item.profile === agent.id);
-  const voice = (state.voiceSettings?.profiles || []).find((item) => item.profile === agent.id);
   const issues = healthAgent?.issues || [];
   return {
     health: healthAgent?.health || (agent.gateway === "running" ? "ok" : "attention"),
@@ -869,7 +867,6 @@ function controlAgentMeta(agent) {
     logs: healthAgent?.logs,
     telegram,
     model,
-    voice,
   };
 }
 
@@ -881,9 +878,10 @@ function renderControlPanel() {
   const telegramProfiles = state.telegramSettings?.profiles || [];
   const telegramReady = telegramProfiles.filter((profile) => profile.configured).length;
   const idReady = telegramProfiles.filter((profile) => profile.allowedUsersConfigured).length;
-  const voiceProfiles = state.voiceSettings?.profiles || [];
-  const groqReady = voiceProfiles.filter((profile) => profile.provider === "groq" && profile.groqConfigured).length;
-  const voiceLabel = state.voiceSettings?.providerLabel || "Hermes";
+  const globalVoice = state.voiceSettings?.global || {};
+  const voiceProvider = globalVoice.provider || state.voiceSettings?.provider || "local";
+  const voiceLabel = globalVoice.providerLabel || state.voiceSettings?.providerLabel || "Hermes";
+  const voiceReady = voiceProvider !== "groq" || globalVoice.groqConfigured;
   const messageHtml = state.controlMessage
     ? `<div class="control-message">${escapeHtml(state.controlMessage)}</div>`
     : "";
@@ -904,16 +902,10 @@ function renderControlPanel() {
       <strong>${idReady}/${telegramProfiles.length || 0}</strong>
       <small>ID назначено</small>
     </div>
-    <div class="control-stat ok">
-      <span>Модель</span>
-      <strong>${escapeHtml((state.modelSettings?.models || []).join(", ") || state.modelSettings?.fallback || "не задано")}</strong>
-      <small>текущая конфигурация</small>
-    </div>
-    <div class="control-stat ${state.voiceSettings?.provider === "groq" && groqReady !== voiceProfiles.length ? "attention" : "ok"}">
-      <span>Голос</span>
+    <button type="button" class="control-stat control-stat-action ${voiceReady ? "ok" : "attention"}" data-action="edit-global-voice" aria-label="Настроить голосовой движок для всех агентов">
+      <span>Голосовой движок</span>
       <strong>${escapeHtml(voiceLabel)}</strong>
-      <small>${state.voiceSettings?.provider === "groq" ? `${groqReady}/${voiceProfiles.length || 0} ключей` : "родной STT"}</small>
-    </div>
+    </button>
   `;
   els.controlAgents.innerHTML = agents.map((agent) => {
     const meta = controlAgentMeta(agent);
@@ -924,11 +916,6 @@ function renderControlPanel() {
     const tokenActionText = meta.telegram?.configured ? "Изменить токен" : "Привязать токен";
     const idActionText = meta.telegram?.allowedUsersConfigured ? "Добавить/изменить ID" : "Привязать ID";
     const modelText = meta.model?.current || meta.model?.model || state.modelSettings?.fallback || "не задано";
-    const voiceProvider = meta.voice?.provider || "local";
-    const voiceText = voiceProvider === "groq"
-      ? (meta.voice?.groqConfigured ? "Groq" : "Groq: ключ не добавлен")
-      : "Hermes";
-    const voiceStatus = voiceProvider === "groq" && !meta.voice?.groqConfigured ? "bad" : "ok";
     const issueText = meta.issues.length ? meta.issues.slice(0, 2).join("; ") : "без критичных проблем";
     return `
       <article class="control-agent-card ${meta.health}" data-agent-card="${escapeHtml(agent.id)}">
@@ -944,13 +931,11 @@ function renderControlPanel() {
           <div><span>Телеграм-бот</span><strong class="control-status-text ${tokenStatus}">${tokenText}</strong></div>
           <div><span>Сессии</span><strong>${meta.sessions?.count ?? "?"}</strong></div>
           <div><span>Телеграм ID</span><strong class="control-status-text ${idStatus}">${idText}</strong></div>
-          <div><span>Голосовой движок</span><strong class="control-status-text ${voiceStatus}">${escapeHtml(voiceText)}</strong></div>
         </div>
         <div class="control-agent-issue">${escapeHtml(issueText)}</div>
         <div class="control-agent-actions">
           <button type="button" class="mini-action" data-action="restart-agent" data-agent="${escapeHtml(agent.id)}">Перезапустить</button>
           <button type="button" class="mini-action" data-action="edit-model" data-agent="${escapeHtml(agent.id)}">Выбрать модель</button>
-          <button type="button" class="mini-action" data-action="edit-voice" data-agent="${escapeHtml(agent.id)}">Изменить голос</button>
           <button type="button" class="mini-action" data-action="edit-token" data-agent="${escapeHtml(agent.id)}">${tokenActionText}</button>
           <button type="button" class="mini-action" data-action="edit-id" data-agent="${escapeHtml(agent.id)}">${idActionText}</button>
         </div>
@@ -959,6 +944,9 @@ function renderControlPanel() {
   }).join("");
   for (const btn of els.controlAgents.querySelectorAll("[data-action]")) {
     btn.addEventListener("click", () => handleControlAction(btn.dataset.action, btn.dataset.agent));
+  }
+  for (const btn of els.controlSummary.querySelectorAll("[data-action]")) {
+    btn.addEventListener("click", () => handleControlAction(btn.dataset.action, ""));
   }
 }
 
@@ -1322,29 +1310,24 @@ function closeModelModal() {
   state.modelModal = { agentId: "" };
 }
 
-function voiceProfileFor(agentId) {
-  return (state.voiceSettings?.profiles || []).find((profile) => profile.profile === agentId) || null;
-}
-
 function refreshVoiceProviderFields() {
   const provider = els.voiceModalProvider.value || "local";
   els.voiceGroqFields.hidden = provider !== "groq";
 }
 
-function openVoiceModal(agentId) {
-  const agent = state.agents.find((item) => item.id === agentId);
-  const profile = voiceProfileFor(agentId);
+function openVoiceModal() {
+  const globalVoice = state.voiceSettings?.global || {};
   const options = state.voiceSettings?.options || [
     { id: "local", label: "Hermes" },
     { id: "groq", label: "Groq" },
   ];
   const groqModels = state.voiceSettings?.groqModels || ["whisper-large-v3-turbo"];
-  const currentProvider = profile?.provider || state.voiceSettings?.provider || "local";
-  const currentGroqModel = profile?.groqModel || state.voiceSettings?.groqFallbackModel || groqModels[0] || "whisper-large-v3-turbo";
-  state.voiceModal = { agentId };
+  const currentProvider = globalVoice.provider || state.voiceSettings?.provider || "local";
+  const currentGroqModel = globalVoice.groqModel || state.voiceSettings?.groqFallbackModel || groqModels[0] || "whisper-large-v3-turbo";
+  state.voiceModal = { open: true };
   els.voiceModalError.hidden = true;
   els.voiceModalError.textContent = "";
-  els.voiceModalTitle.textContent = `Голосовой движок: ${agent?.name || agentId}`;
+  els.voiceModalTitle.textContent = "Голосовой движок для всех агентов";
   els.voiceModalProvider.innerHTML = options.map((option) => `
     <option value="${escapeHtml(option.id)}"${option.id === currentProvider ? " selected" : ""}>${escapeHtml(option.label)}</option>
   `).join("");
@@ -1352,11 +1335,10 @@ function openVoiceModal(agentId) {
     <option value="${escapeHtml(model)}"${model === currentGroqModel ? " selected" : ""}>${escapeHtml(model)}</option>
   `).join("");
   els.voiceModalGroqKey.value = "";
-  els.voiceModalGroqKey.placeholder = profile?.groqConfigured
-    ? `ключ уже сохранен: ${profile.groqKeyPreview}`
+  els.voiceModalGroqKey.placeholder = globalVoice.groqConfigured
+    ? `ключ уже сохранен: ${globalVoice.groqKeyPreview}`
     : "gsk_...";
-  els.voiceModalApplyAll.checked = true;
-  els.voiceModalHint.innerHTML = 'Hermes работает без ключа. Для Groq открой <a href="https://console.groq.com/keys" target="_blank" rel="noopener">Groq API Keys</a>, создай ключ, скопируй значение вида <code>gsk_...</code> и вставь сюда. После сохранения WebShell сам перезапустит gateway.';
+  els.voiceModalHint.innerHTML = 'Настройка применяется ко всем существующим и будущим агентам. Hermes работает без ключа. Для Groq открой <a href="https://console.groq.com/keys" target="_blank" rel="noopener">Groq API Keys</a>, создай ключ, скопируй значение вида <code>gsk_...</code> и вставь сюда. После сохранения WebShell сам перезапустит gateway.';
   refreshVoiceProviderFields();
   els.voiceModal.hidden = false;
   window.setTimeout(() => els.voiceModalProvider.focus(), 0);
@@ -1364,16 +1346,14 @@ function openVoiceModal(agentId) {
 
 function closeVoiceModal() {
   els.voiceModal.hidden = true;
-  state.voiceModal = { agentId: "" };
+  state.voiceModal = { open: false };
 }
 
 async function saveVoiceModal() {
-  const { agentId } = state.voiceModal;
-  if (!agentId) return;
+  if (!state.voiceModal.open) return;
   const provider = els.voiceModalProvider.value.trim();
   const groqApiKey = els.voiceModalGroqKey.value.trim();
   const groqModel = els.voiceModalGroqModel.value.trim();
-  const applyAll = els.voiceModalApplyAll.checked;
   if (provider === "groq" && groqApiKey && !/^gsk_[A-Za-z0-9_-]{16,}$/.test(groqApiKey)) {
     els.voiceModalError.hidden = false;
     els.voiceModalError.textContent = "Groq API key должен начинаться с gsk_.";
@@ -1386,28 +1366,20 @@ async function saveVoiceModal() {
       provider,
       groqModel,
       ...(groqApiKey ? { groqApiKey } : {}),
-      ...(applyAll ? {} : { agentIds: [agentId] }),
     };
-    const data = await api(applyAll ? "/api/voice" : `/api/agents/${agentId}/voice`, {
+    const data = await api("/api/voice", {
       method: "POST",
       body: JSON.stringify(body),
     });
-    const agent = state.agents.find((item) => item.id === agentId);
     closeVoiceModal();
     const results = data.results || (data.profile ? [data] : []);
     const skipped = restartSkippedNames(results);
     const failed = restartFailedNames(results);
-    await loadControlPanel(applyAll
-      ? (failed.length
-        ? `Голос сохранен, но gateway не перезапустился: ${failed.join(", ")}`
-        : skipped.length
-          ? `Голос сохранен. Gateway занятого агента не трогал: ${skipped.join(", ")}`
-          : "Голосовой движок обновлен для всех агентов")
-      : (failed.length
-        ? `${agent?.name || agentId}: голос сохранен, но gateway не перезапустился`
-        : skipped.length
-          ? `${agent?.name || agentId}: голос сохранен, gateway сейчас занят`
-          : `${agent?.name || agentId}: голосовой движок обновлен`));
+    await loadControlPanel(failed.length
+      ? `Голос сохранен, но gateway не перезапустился: ${failed.join(", ")}`
+      : skipped.length
+        ? `Голос сохранен. Gateway занятого агента не трогал: ${skipped.join(", ")}`
+        : "Голосовой движок обновлен для всех агентов");
     await refreshSidebar();
   } catch (error) {
     els.voiceModalError.hidden = false;
@@ -1458,8 +1430,8 @@ async function handleControlAction(action, agentId) {
     });
     return;
   }
+  if (action === "edit-global-voice") openVoiceModal();
   if (action === "edit-model") openModelModal(agentId);
-  if (action === "edit-voice") openVoiceModal(agentId);
   if (action === "edit-token") openTelegramModal(agentId, "token");
   if (action === "edit-id") openTelegramModal(agentId, "id");
 }
