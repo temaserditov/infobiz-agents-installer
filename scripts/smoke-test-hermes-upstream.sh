@@ -62,7 +62,7 @@ patch_and_check() {
     else
       dir="$home/profiles/$profile"
     fi
-    printf "model:\n  provider: openai-codex\n  default: gpt-5.4-mini\n  openai_runtime: codex_app_server\n  api_mode: codex_app_server\n  context_length: 100000\nstreaming:\n  enabled: true\n  transport: edit\ndisplay:\n  streaming: true\n  interim_assistant_messages: true\n  platforms:\n    telegram:\n      streaming: true\ncompression:\n  enabled: false\nmemory:\n  nudge_interval: 0\nskills:\n  creation_nudge_interval: 0\n" > "$dir/config.yaml"
+    printf "model:\n  provider: openai-codex\n  default: gpt-5.4-mini\n  openai_runtime: codex_app_server\n  api_mode: codex_app_server\n  context_length: 100000\nstreaming:\n  enabled: true\n  transport: edit\ndisplay:\n  streaming: true\n  interim_assistant_messages: true\n  tool_progress: all\n  long_running_notifications: true\n  busy_ack_detail: true\n  platforms:\n    telegram:\n      streaming: true\n      tool_progress: all\n      long_running_notifications: true\n      busy_ack_detail: true\ncompression:\n  enabled: false\nmemory:\n  nudge_interval: 0\nskills:\n  creation_nudge_interval: 0\n" > "$dir/config.yaml"
     printf "GATEWAY_ALLOW_ALL_USERS='true'\n" > "$dir/.env"
   done
 
@@ -84,6 +84,7 @@ patch_and_check() {
   "$PYTHON_BIN" -m py_compile \
     "$source/agent/transports/codex_app_server_session.py" \
     "$source/agent/codex_runtime.py" \
+    "$source/gateway/run.py" \
     "$source/plugins/platforms/telegram/adapter.py" \
     "$source/gateway/platforms/base.py" \
     "$source/tools/image_generation_tool.py" \
@@ -91,6 +92,14 @@ patch_and_check() {
 
   grep -Fq "GATEWAY_ALLOW_ALL_USERS='false'" "$home/.env" \
     || fail "$name: Telegram default was not closed"
+  grep -Fq "HERMES_CODEX_EVENT_STALE_TIMEOUT_SECONDS='120'" "$home/.env" \
+    || fail "$name: Codex event watchdog was not relaxed"
+  grep -Fq "HERMES_CODEX_TTFB_TIMEOUT_SECONDS='120'" "$home/.env" \
+    || fail "$name: Codex TTFB watchdog was not configured"
+  grep -Fq 'codex\s+stream\s+sent\s+no\s+events' "$source/gateway/run.py" \
+    || fail "$name: transient Codex reconnect status was not filtered"
+  grep -Fq 'no\s+response\s+from\s+provider\s+for\s+\d+s' "$source/gateway/run.py" \
+    || fail "$name: transient provider timeout status was not filtered"
   "$PYTHON_BIN" - "$home" <<'PY'
 import sys
 from pathlib import Path
@@ -113,7 +122,13 @@ for profile in ("default", "marketer", "copywriter", "designer", "tech"):
     assert streaming.get("transport") == "off", profile
     assert display.get("streaming") is False, profile
     assert display.get("interim_assistant_messages") is False, profile
+    assert display.get("tool_progress") == "off", profile
+    assert display.get("long_running_notifications") is False, profile
+    assert display.get("busy_ack_detail") is False, profile
     assert telegram.get("streaming") is False, profile
+    assert telegram.get("tool_progress") == "off", profile
+    assert telegram.get("long_running_notifications") is False, profile
+    assert telegram.get("busy_ack_detail") is False, profile
     assert (data.get("compression") or {}).get("enabled") is not False, profile
     assert (data.get("memory") or {}).get("nudge_interval") != 0, profile
     assert (data.get("skills") or {}).get("creation_nudge_interval") != 0, profile

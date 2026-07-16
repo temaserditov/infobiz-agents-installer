@@ -81,9 +81,17 @@ def patch_config(path: Path, yaml: Any) -> bool:
     display = ensure_dict(data, "display")
     display["streaming"] = False
     display["interim_assistant_messages"] = False
+    # Keep operational lifecycle chatter in logs. Students should see the
+    # completed answer (or one final error), not internal timers and retries.
+    display["tool_progress"] = "off"
+    display["long_running_notifications"] = False
+    display["busy_ack_detail"] = False
     platforms = ensure_dict(display, "platforms")
     telegram = ensure_dict(platforms, "telegram")
     telegram["streaming"] = False
+    telegram["tool_progress"] = "off"
+    telegram["long_running_notifications"] = False
+    telegram["busy_ack_detail"] = False
 
     auxiliary = ensure_dict(data, "auxiliary")
     title_generation = ensure_dict(auxiliary, "title_generation")
@@ -111,9 +119,22 @@ def patch_config(path: Path, yaml: Any) -> bool:
 
 def patch_profile_env(path: Path) -> bool:
     text = path.read_text(encoding="utf-8", errors="ignore") if path.exists() else ""
-    line = "GATEWAY_ALLOW_ALL_USERS='false'"
-    pattern = re.compile(r"^GATEWAY_ALLOW_ALL_USERS=.*$", re.M)
-    updated = pattern.sub(line, text) if pattern.search(text) else text.rstrip() + "\n" + line + "\n"
+    updated = text
+    required = {
+        "GATEWAY_ALLOW_ALL_USERS": "false",
+        # Hermes defaults to just 12 seconds after the first SSE event for a
+        # small Codex request. GPT-5.5 can legitimately stay silent longer
+        # while reasoning, so retain recovery but avoid false reconnects.
+        "HERMES_CODEX_EVENT_STALE_TIMEOUT_SECONDS": "120",
+        "HERMES_CODEX_TTFB_TIMEOUT_SECONDS": "120",
+    }
+    for key, value in required.items():
+        line = f"{key}='{value}'"
+        pattern = re.compile(rf"^{re.escape(key)}=.*$", re.M)
+        if pattern.search(updated):
+            updated = pattern.sub(line, updated)
+        else:
+            updated = updated.rstrip() + "\n" + line + "\n"
     if updated == text and path.exists():
         path.chmod(0o600)
         return False
@@ -183,6 +204,29 @@ def _title_generation_enabled() -> bool:
     return False
 
 
+def patch_gateway_status_filter(hermes_agent_root: Path) -> bool:
+    path = hermes_agent_root / "gateway" / "run.py"
+    if not path.exists():
+        fail(f"Hermes gateway runtime not found: {path}")
+
+    text = path.read_text(encoding="utf-8")
+    original = text
+    additions = (
+        '    r"|codex\\s+stream\\s+sent\\s+no\\s+events"\n'
+        '    r"|no\\s+response\\s+from\\s+provider\\s+for\\s+\\d+s"\n'
+    )
+    if "codex\\s+stream\\s+sent\\s+no\\s+events" not in text:
+        marker = '    r"|stale\\s+connections\\s+from\\s+a\\s+previous\\s+provider\\s+issue"\n'
+        if marker not in text:
+            fail("Could not patch Hermes gateway status filter: insertion point not found")
+        text = text.replace(marker, marker + additions, 1)
+
+    if text != original:
+        path.write_text(text, encoding="utf-8")
+        return True
+    return False
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--hermes-root", required=True)
@@ -196,6 +240,7 @@ def main() -> None:
     yaml = load_yaml_module()
 
     patched_title = patch_title_generator(hermes_agent_root)
+    patched_status_filter = patch_gateway_status_filter(hermes_agent_root)
     patched_configs = 0
     patched_envs = 0
 
@@ -210,6 +255,7 @@ def main() -> None:
     print(
         "Hermes Codex runtime safety: "
         f"title_generator={'patched' if patched_title else 'ok'}, "
+        f"status_filter={'patched' if patched_status_filter else 'ok'}, "
         f"configs={patched_configs}, envs={patched_envs}"
     )
 
