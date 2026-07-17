@@ -19,6 +19,8 @@ HERMES_IMAGE_REFERENCE_PATCH_URL="${HERMES_IMAGE_REFERENCE_PATCH_URL:-https://ra
 HERMES_TELEGRAM_TEXT_PHOTO_MERGE_PATCH_URL="${HERMES_TELEGRAM_TEXT_PHOTO_MERGE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-telegram-text-photo-merge.py}"
 HERMES_LOCAL_MEDIA_MARKDOWN_PATCH_URL="${HERMES_LOCAL_MEDIA_MARKDOWN_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-local-media-markdown.py}"
 HERMES_RUNTIME_SAFETY_PATCH_URL="${HERMES_RUNTIME_SAFETY_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-codex-runtime-safety.py}"
+HERMES_TELEGRAM_RELIABILITY_PATCH_URL="${HERMES_TELEGRAM_RELIABILITY_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-telegram-reliability.py}"
+HERMES_SESSION_HISTORY_REPAIR_URL="${HERMES_SESSION_HISTORY_REPAIR_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/repair-hermes-session-history.py}"
 AGENT_RUSSIAN_ONLY_PATCH_URL="${AGENT_RUSSIAN_ONLY_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-agent-russian-only.py}"
 TECH_NO_CODE_PATCH_URL="${TECH_NO_CODE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-tech-no-code-defaults.py}"
 HERMES_SOURCE_URL="${HERMES_SOURCE_URL:-}"
@@ -335,6 +337,33 @@ patch_hermes_codex_runtime_safety() {
     --hermes-root "$HERMES_ROOT" \
     --hermes-agent-root "$HERMES_AGENT_ROOT" \
     --profiles "marketer,copywriter,designer,tech"
+}
+
+patch_hermes_telegram_reliability() {
+  download_and_run_python_patch "$HERMES_TELEGRAM_RELIABILITY_PATCH_URL" "$HERMES_AGENT_ROOT"
+}
+
+repair_hermes_session_history() {
+  download_and_run_python_patch "$HERMES_SESSION_HISTORY_REPAIR_URL" \
+    --hermes-root "$HERMES_ROOT" \
+    --profiles "default,marketer,copywriter,designer,tech" \
+    --apply
+}
+
+stop_gateways_for_maintenance() {
+  if command -v systemctl >/dev/null 2>&1; then
+    local service
+    for service in \
+      infobiz-hermes-gateway.service \
+      infobiz-hermes-gateway-marketer.service \
+      infobiz-hermes-gateway-copywriter.service \
+      infobiz-hermes-gateway-designer.service \
+      infobiz-hermes-gateway-tech.service
+    do
+      systemctl stop "$service" >/dev/null 2>&1 || true
+    done
+    GATEWAYS_STOPPED=1
+  fi
 }
 
 patch_agents_russian_only() {
@@ -667,6 +696,13 @@ patch_agents_russian_only
 
 say "Patching Hermes Codex runtime safety"
 patch_hermes_codex_runtime_safety
+
+say "Patching Telegram delivery reliability"
+patch_hermes_telegram_reliability
+
+say "Repairing incomplete session history"
+stop_gateways_for_maintenance
+repair_hermes_session_history
 
 say "Repairing service definitions"
 ensure_vps_services

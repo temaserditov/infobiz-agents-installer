@@ -69,6 +69,7 @@ patch_and_check() {
   "$PYTHON_BIN" "$SCRIPT_DIR/patch-hermes-image-reference.py" "$source"
   "$PYTHON_BIN" "$SCRIPT_DIR/patch-telegram-text-photo-merge.py" "$source"
   "$PYTHON_BIN" "$SCRIPT_DIR/patch-hermes-local-media-markdown.py" "$source"
+  "$PYTHON_BIN" "$SCRIPT_DIR/patch-hermes-telegram-reliability.py" "$source"
   "$PYTHON_BIN" "$SCRIPT_DIR/patch-hermes-codex-runtime-safety.py" \
     --hermes-root "$home" --hermes-agent-root "$source" \
     --profiles marketer,copywriter,designer,tech
@@ -77,6 +78,7 @@ patch_and_check() {
   "$PYTHON_BIN" "$SCRIPT_DIR/patch-hermes-image-reference.py" "$source" >/dev/null
   "$PYTHON_BIN" "$SCRIPT_DIR/patch-telegram-text-photo-merge.py" "$source" >/dev/null
   "$PYTHON_BIN" "$SCRIPT_DIR/patch-hermes-local-media-markdown.py" "$source" >/dev/null
+  "$PYTHON_BIN" "$SCRIPT_DIR/patch-hermes-telegram-reliability.py" "$source" >/dev/null
   "$PYTHON_BIN" "$SCRIPT_DIR/patch-hermes-codex-runtime-safety.py" \
     --hermes-root "$home" --hermes-agent-root "$source" \
     --profiles marketer,copywriter,designer,tech >/dev/null
@@ -96,10 +98,23 @@ patch_and_check() {
     || fail "$name: Codex event watchdog was not relaxed"
   grep -Fq "HERMES_CODEX_TTFB_TIMEOUT_SECONDS='120'" "$home/.env" \
     || fail "$name: Codex TTFB watchdog was not configured"
+  grep -Fq "HERMES_DISABLE_TELEGRAM_TYPING_REFRESH='true'" "$home/.env" \
+    || fail "$name: Telegram typing refresh was not disabled"
+  grep -Fq "HERMES_TELEGRAM_CHUNK_DELAY_SECONDS='1.2'" "$home/.env" \
+    || fail "$name: Telegram chunk pacing was not configured"
+  grep -Fq 'INFOBIZ_TELEGRAM_TYPING_REFRESH_GUARD' "$source/gateway/platforms/base.py" \
+    || fail "$name: Telegram typing refresh guard was not patched"
+  grep -Fq 'INFOBIZ_TELEGRAM_CHUNK_PACING' "$source/plugins/platforms/telegram/adapter.py" \
+    || fail "$name: Telegram chunk pacing was not patched"
   grep -Fq 'codex\s+stream\s+sent\s+no\s+events' "$source/gateway/run.py" \
     || fail "$name: transient Codex reconnect status was not filtered"
   grep -Fq 'no\s+response\s+from\s+provider\s+for\s+\d+s' "$source/gateway/run.py" \
     || fail "$name: transient provider timeout status was not filtered"
+  grep -Fq 'INFOBIZ_PRIVACY_SAFE_INBOUND_LOG' "$source/gateway/run.py" \
+    || fail "$name: inbound user text was not removed from gateway logs"
+  if grep -Fq 'msg=%r reply_to_id=%s reply_to_text=%r' "$source/gateway/run.py"; then
+    fail "$name: gateway still logs inbound user content"
+  fi
   "$PYTHON_BIN" - "$home" <<'PY'
 import sys
 from pathlib import Path

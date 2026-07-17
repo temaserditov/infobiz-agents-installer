@@ -18,6 +18,7 @@ trap 'rm -rf "$TMP_ROOT"' EXIT
 node --check "$SOURCE/server.mjs"
 node --check "$SOURCE/public/app.js"
 node --check "$SOURCE/scripts/smoke.mjs"
+node "$SOURCE/scripts/redaction-smoke.mjs"
 python3 -m py_compile "$SOURCE/runner.py"
 
 mkdir -p "$OUT_DIR"

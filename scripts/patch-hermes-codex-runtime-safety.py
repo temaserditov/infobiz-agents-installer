@@ -127,6 +127,11 @@ def patch_profile_env(path: Path) -> bool:
         # while reasoning, so retain recovery but avoid false reconnects.
         "HERMES_CODEX_EVENT_STALE_TIMEOUT_SECONDS": "120",
         "HERMES_CODEX_TTFB_TIMEOUT_SECONDS": "120",
+        # Continuous sendChatAction calls every two seconds consumed Telegram's
+        # flood-control budget during slow Codex turns. One initial typing event
+        # is enough; long answers are separately paced by the transport patch.
+        "HERMES_DISABLE_TELEGRAM_TYPING_REFRESH": "true",
+        "HERMES_TELEGRAM_CHUNK_DELAY_SECONDS": "1.2",
     }
     for key, value in required.items():
         line = f"{key}='{value}'"
@@ -227,6 +232,44 @@ def patch_gateway_status_filter(hermes_agent_root: Path) -> bool:
     return False
 
 
+def patch_gateway_message_logging(hermes_agent_root: Path) -> bool:
+    path = hermes_agent_root / "gateway" / "run.py"
+    if not path.exists():
+        fail(f"Hermes gateway runtime not found: {path}")
+
+    text = path.read_text(encoding="utf-8")
+    marker = "INFOBIZ_PRIVACY_SAFE_INBOUND_LOG"
+    if marker in text:
+        return False
+
+    old = '''        _msg_preview = (event.text or "")[:80].replace("\\n", " ")
+        _reply_id = getattr(event, "reply_to_message_id", None)
+        _reply_txt = (getattr(event, "reply_to_text", None) or "")[:80].replace("\\n", " ")
+        logger.info(
+            "inbound message: platform=%s user=%s chat=%s msg=%r reply_to_id=%s reply_to_text=%r",
+            _platform_name, source.user_name or source.user_id or "unknown",
+            source.chat_id or "unknown", _msg_preview, _reply_id, _reply_txt,
+        )
+'''
+    new = '''        # INFOBIZ_PRIVACY_SAFE_INBOUND_LOG
+        # Logs are routinely shared for support. Keep operational dimensions,
+        # never a user's name, Telegram ID, prompt, or quoted message text.
+        _message_chars = len(event.text or "")
+        _has_reply = bool(
+            getattr(event, "reply_to_message_id", None)
+            or getattr(event, "reply_to_text", None)
+        )
+        logger.info(
+            "inbound message: platform=%s text_chars=%s has_reply=%s",
+            _platform_name, _message_chars, _has_reply,
+        )
+'''
+    if old not in text:
+        fail("Could not patch Hermes inbound logging: expected source block not found")
+    path.write_text(text.replace(old, new, 1), encoding="utf-8")
+    return True
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--hermes-root", required=True)
@@ -241,6 +284,7 @@ def main() -> None:
 
     patched_title = patch_title_generator(hermes_agent_root)
     patched_status_filter = patch_gateway_status_filter(hermes_agent_root)
+    patched_message_logging = patch_gateway_message_logging(hermes_agent_root)
     patched_configs = 0
     patched_envs = 0
 
@@ -256,6 +300,7 @@ def main() -> None:
         "Hermes Codex runtime safety: "
         f"title_generator={'patched' if patched_title else 'ok'}, "
         f"status_filter={'patched' if patched_status_filter else 'ok'}, "
+        f"message_logging={'patched' if patched_message_logging else 'ok'}, "
         f"configs={patched_configs}, envs={patched_envs}"
     )
 

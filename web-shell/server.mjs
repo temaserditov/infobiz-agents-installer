@@ -4,6 +4,7 @@ import { chmodSync, createReadStream, existsSync, mkdirSync, readdirSync, readFi
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
+import { redactSensitiveText, redactSupportLogText, redactSupportValue } from "./lib/redaction.mjs";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const PORT = Number(process.env.PORT || 8787);
@@ -742,18 +743,6 @@ function runCommand(command, args, options = {}) {
   };
 }
 
-function redactSensitiveText(value) {
-  return String(value || "")
-    .replace(/\b\d{6,}:[A-Za-z0-9_-]{20,}\b/g, "[telegram-token]")
-    .replace(/\bgsk_[A-Za-z0-9_-]{16,}\b/g, "[groq-key]")
-    .replace(/\bsk-proj-[A-Za-z0-9_-]{20,}\b/g, "[openai-key]")
-    .replace(/\bsk-[A-Za-z0-9_-]{20,}\b/g, "[openai-key]")
-    .replace(/(Authorization:\s*Bearer\s+)[^\s"'<>]+/gi, "$1[redacted]")
-    .replace(/((?:OPENAI_API_KEY|GROQ_API_KEY|TELEGRAM_BOT_TOKEN|WEB_SHELL_ACCESS_TOKEN|INFOBIZ_SUPPORT_TOKEN|TOKEN|SECRET|PASSWORD|AUTH|BEARER)\s*(?::|=|=>)\s*)("[^"]*"|'[^']*'|[^\s,;<>]+)/gi, "$1[redacted]")
-    .replace(/(<string>\s*(?:WEB_SHELL_ACCESS_TOKEN|INFOBIZ_SUPPORT_TOKEN|TELEGRAM_BOT_TOKEN|GROQ_API_KEY)\s*<\/string>\s*<string>)[^<]*(<\/string>)/gi, "$1[redacted]$2")
-    .replace(/([?&](?:token|access_token)=)[^&#\s]+/gi, "$1[redacted]");
-}
-
 function redactSensitive(value) {
   if (typeof value === "string") return redactSensitiveText(value);
   if (Array.isArray(value)) return value.map((item) => redactSensitive(item));
@@ -783,6 +772,14 @@ function safeTail(path, count = 220) {
     path,
     exists: existsSync(path),
     text: redactSensitiveText(tailLines(path, count)).slice(-30_000),
+  };
+}
+
+function safeSupportTail(path, count = 220) {
+  return {
+    path: redactSupportLogText(path),
+    exists: existsSync(path),
+    text: redactSupportLogText(tailLines(path, count)).slice(-30_000),
   };
 }
 
@@ -3575,8 +3572,8 @@ function supportBundle() {
       voice: supportSection("voice", () => voiceSettings(id)),
       runtimeFiles: supportSection("runtimeFiles", () => profileRuntimeFiles(id)),
       logs: {
-        gateway: safeTail(join(profileDir(id), "logs", "gateway.log"), 260),
-        gatewayError: safeTail(join(profileDir(id), "logs", "gateway.error.log"), 180),
+        gateway: safeSupportTail(join(profileDir(id), "logs", "gateway.log"), 260),
+        gatewayError: safeSupportTail(join(profileDir(id), "logs", "gateway.error.log"), 180),
       },
     }));
   const bundle = {
@@ -3610,15 +3607,15 @@ function supportBundle() {
     },
     agents,
     logs: {
-      webShellOut: safeTail(join(INSTALL_ROOT, "web-shell.out.log"), 260),
-      webShellErr: safeTail(join(INSTALL_ROOT, "web-shell.err.log"), 260),
-      install: safeTail(join(INSTALL_ROOT, "install.log"), 180),
-      update: safeTail(join(INSTALL_ROOT, "update.log"), 180),
+      webShellOut: safeSupportTail(join(INSTALL_ROOT, "web-shell.out.log"), 260),
+      webShellErr: safeSupportTail(join(INSTALL_ROOT, "web-shell.err.log"), 260),
+      install: safeSupportTail(join(INSTALL_ROOT, "install.log"), 180),
+      update: safeSupportTail(join(INSTALL_ROOT, "update.log"), 180),
     },
     processes: supportSection("processes", () => supportProcessRows()),
     services: supportSection("services", () => supportServiceSummary()),
   };
-  return redactSensitive(bundle);
+  return redactSupportValue(bundle);
 }
 
 function createSnapshot() {

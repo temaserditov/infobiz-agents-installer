@@ -35,6 +35,8 @@ HERMES_IMAGE_REFERENCE_PATCH_URL="${HERMES_IMAGE_REFERENCE_PATCH_URL:-https://ra
 HERMES_TELEGRAM_TEXT_PHOTO_MERGE_PATCH_URL="${HERMES_TELEGRAM_TEXT_PHOTO_MERGE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-telegram-text-photo-merge.py}"
 HERMES_LOCAL_MEDIA_MARKDOWN_PATCH_URL="${HERMES_LOCAL_MEDIA_MARKDOWN_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-local-media-markdown.py}"
 HERMES_RUNTIME_SAFETY_PATCH_URL="${HERMES_RUNTIME_SAFETY_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-codex-runtime-safety.py}"
+HERMES_TELEGRAM_RELIABILITY_PATCH_URL="${HERMES_TELEGRAM_RELIABILITY_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-telegram-reliability.py}"
+HERMES_SESSION_HISTORY_REPAIR_URL="${HERMES_SESSION_HISTORY_REPAIR_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/repair-hermes-session-history.py}"
 AGENT_RUSSIAN_ONLY_PATCH_URL="${AGENT_RUSSIAN_ONLY_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-agent-russian-only.py}"
 UPDATE_SCRIPT_URL="${UPDATE_SCRIPT_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/update-infobiz-agents.sh}"
 FORCE_REINSTALL="${FORCE_REINSTALL:-0}"
@@ -570,6 +572,21 @@ patch_hermes_codex_runtime_safety() {
     --hermes-root "$HERMES_ROOT" \
     --hermes-agent-root "$HERMES_AGENT_ROOT" \
     --profiles "$AGENT_PROFILES"
+}
+
+patch_hermes_telegram_reliability() {
+  local patcher="$TMPDIR/patch-hermes-telegram-reliability.py"
+  download_file "$HERMES_TELEGRAM_RELIABILITY_PATCH_URL" "$patcher" || return 1
+  "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" "$HERMES_AGENT_ROOT"
+}
+
+repair_hermes_session_history() {
+  local patcher="$TMPDIR/repair-hermes-session-history.py"
+  download_file "$HERMES_SESSION_HISTORY_REPAIR_URL" "$patcher" || return 1
+  "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" \
+    --hermes-root "$HERMES_ROOT" \
+    --profiles "default,$AGENT_PROFILES" \
+    --apply
 }
 
 patch_agents_russian_only() {
@@ -1338,6 +1355,8 @@ printf "The installer will open the authorization page and copy the code when He
 run_hermes_auth || fail "OpenAI/Hermes authorization failed"
 apply_best_available_model || fail "Could not select an available OpenAI model"
 patch_hermes_codex_runtime_safety >> "$LOG_FILE" 2>&1 || fail "Could not patch Hermes Codex runtime safety"
+patch_hermes_telegram_reliability >> "$LOG_FILE" 2>&1 || fail "Could not patch Telegram delivery reliability"
+repair_hermes_session_history >> "$LOG_FILE" 2>&1 || fail "Could not repair incomplete session history"
 
 say "Installing Hermes gateway services"
 run_hermes gateway install --force >> "$LOG_FILE" 2>&1 || fail "Could not install Hermes gateway service"

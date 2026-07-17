@@ -22,6 +22,8 @@ HERMES_IMAGE_REFERENCE_PATCH_URL="${HERMES_IMAGE_REFERENCE_PATCH_URL:-https://ra
 HERMES_TELEGRAM_TEXT_PHOTO_MERGE_PATCH_URL="${HERMES_TELEGRAM_TEXT_PHOTO_MERGE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-telegram-text-photo-merge.py}"
 HERMES_LOCAL_MEDIA_MARKDOWN_PATCH_URL="${HERMES_LOCAL_MEDIA_MARKDOWN_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-local-media-markdown.py}"
 HERMES_RUNTIME_SAFETY_PATCH_URL="${HERMES_RUNTIME_SAFETY_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-codex-runtime-safety.py}"
+HERMES_TELEGRAM_RELIABILITY_PATCH_URL="${HERMES_TELEGRAM_RELIABILITY_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-hermes-telegram-reliability.py}"
+HERMES_SESSION_HISTORY_REPAIR_URL="${HERMES_SESSION_HISTORY_REPAIR_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/repair-hermes-session-history.py}"
 AGENT_RUSSIAN_ONLY_PATCH_URL="${AGENT_RUSSIAN_ONLY_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-agent-russian-only.py}"
 TECH_NO_CODE_PATCH_URL="${TECH_NO_CODE_PATCH_URL:-https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/scripts/patch-tech-no-code-defaults.py}"
 HERMES_SOURCE_URL="${HERMES_SOURCE_URL:-}"
@@ -368,6 +370,27 @@ patch_hermes_codex_runtime_safety() {
     --profiles "marketer,copywriter,designer,tech"
 }
 
+patch_hermes_telegram_reliability() {
+  download_and_run_python_patch "$HERMES_TELEGRAM_RELIABILITY_PATCH_URL" "$HERMES_AGENT_ROOT"
+}
+
+repair_hermes_session_history() {
+  download_and_run_python_patch "$HERMES_SESSION_HISTORY_REPAIR_URL" \
+    --hermes-root "$HERMES_ROOT" \
+    --profiles "default,marketer,copywriter,designer,tech" \
+    --apply
+}
+
+stop_gateways_for_maintenance() {
+  [[ -x "$HERMES_CMD" ]] || return 0
+  HERMES_HOME="$HERMES_ROOT" "$HERMES_CMD" gateway stop >> "$LOG_FILE" 2>&1 || true
+  local profile
+  for profile in marketer copywriter designer tech; do
+    HERMES_HOME="$HERMES_ROOT" "$HERMES_CMD" -p "$profile" gateway stop >> "$LOG_FILE" 2>&1 || true
+  done
+  GATEWAYS_STOPPED=1
+}
+
 patch_agents_russian_only() {
   download_and_run_python_patch "$AGENT_RUSSIAN_ONLY_PATCH_URL" \
     --hermes-root "$HERMES_ROOT" \
@@ -673,6 +696,13 @@ patch_agents_russian_only >> "$LOG_FILE" 2>&1 || fail "Could not patch Russian-o
 
 say "Patching Hermes Codex runtime safety"
 patch_hermes_codex_runtime_safety >> "$LOG_FILE" 2>&1 || fail "Could not patch Hermes Codex runtime safety"
+
+say "Patching Telegram delivery reliability"
+patch_hermes_telegram_reliability >> "$LOG_FILE" 2>&1 || fail "Could not patch Telegram delivery reliability"
+
+say "Repairing incomplete session history"
+stop_gateways_for_maintenance
+repair_hermes_session_history >> "$LOG_FILE" 2>&1 || fail "Could not repair incomplete session history"
 
 say "Repairing service definitions"
 ensure_mac_services >> "$LOG_FILE" 2>&1 || fail "Could not repair gateway or WebShell services"

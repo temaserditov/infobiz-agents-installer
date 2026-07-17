@@ -372,9 +372,6 @@ main() {
   write_support_env "$token" "$port"
   say "Enabling temporary Infobiz support access"
   update_web_shell_payload
-  update_profile_payload
-  repair_profile_runtime_config
-  restart_gateway_services
   case "$os" in
     Darwin) enable_macos "$token" "$port" ;;
     Linux) enable_linux "$token" "$port" ;;
