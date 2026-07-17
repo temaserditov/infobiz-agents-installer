@@ -496,6 +496,31 @@ patch_official_hermes_setup() {
   /bin/chmod +x "$setup_path" || return 1
 }
 
+ensure_hermes_messaging_support() {
+  local python_bin="$HERMES_AGENT_ROOT/venv/bin/python"
+  [[ -x "$python_bin" ]] || return 1
+
+  if "$python_bin" -c "import telegram, aiohttp, qrcode" >> "$LOG_FILE" 2>&1; then
+    return 0
+  fi
+  [[ -n "$UV_CMD" && -x "$UV_CMD" ]] || return 1
+
+  printf "Official Hermes messaging extra is missing; installing it now.\n" >> "$LOG_FILE"
+  if ! (
+    cd "$HERMES_AGENT_ROOT" && \
+      UV_PROJECT_ENVIRONMENT="$HERMES_AGENT_ROOT/venv" \
+      "$UV_CMD" sync --extra all --extra messaging --locked
+  ) >> "$LOG_FILE" 2>&1; then
+    printf "Locked messaging sync failed; falling back to the official messaging extra.\n" >> "$LOG_FILE"
+    (
+      cd "$HERMES_AGENT_ROOT" && \
+        "$UV_CMD" pip install --python "$python_bin" -e ".[messaging]"
+    ) >> "$LOG_FILE" 2>&1 || return 1
+  fi
+
+  "$python_bin" -c "import telegram, aiohttp, qrcode" >> "$LOG_FILE" 2>&1
+}
+
 resolve_hermes_source() {
   if [[ -n "$HERMES_SOURCE_URL" ]]; then
     HERMES_SOURCE_REF="custom"
@@ -567,7 +592,7 @@ install_hermes_from_source() {
   run_logged "Running official Hermes setup" run_official_hermes_setup || return 1
   [[ -x "$HERMES_AGENT_ROOT/venv/bin/python" ]] || return 1
   [[ -x "$HERMES_CMD" ]] || return 1
-  run_logged "Checking official Hermes messaging support" "$HERMES_AGENT_ROOT/venv/bin/python" -c "import telegram, aiohttp, qrcode" || return 1
+  run_logged "Installing official Hermes messaging support" ensure_hermes_messaging_support || return 1
   printf "managed-runtime\n" > "$HERMES_AGENT_ROOT/.install_method" || return 1
   printf "%s\n" "$HERMES_SOURCE_REF" > "$HERMES_AGENT_ROOT/.infobiz-upstream-ref" || return 1
 

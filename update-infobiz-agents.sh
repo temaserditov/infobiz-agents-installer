@@ -28,6 +28,7 @@ HERMES_SOURCE_URL="${HERMES_SOURCE_URL:-}"
 HERMES_RELEASE_API="${HERMES_RELEASE_API:-https://api.github.com/repos/NousResearch/hermes-agent/releases/latest}"
 HERMES_FALLBACK_TAG="${HERMES_FALLBACK_TAG:-v2026.7.7.2}"
 UPDATE_HERMES_RUNTIME="${UPDATE_HERMES_RUNTIME:-1}"
+HERMES_UV_CMD="${HERMES_UV_CMD:-}"
 GATEWAYS_STOPPED=0
 RUNTIME_SWAP_BACKUP=""
 AGENT_PROFILE_ALLOW="${AGENT_PROFILE_ALLOW:-default,marketer,copywriter,designer,tech}"
@@ -59,6 +60,37 @@ patch_official_hermes_setup_at() {
   ' "$setup_path" > "$tmp_path" || return 1
   /bin/mv "$tmp_path" "$setup_path" || return 1
   /bin/chmod +x "$setup_path" || return 1
+}
+
+ensure_hermes_messaging_support() {
+  local python_bin uv_cmd
+  python_bin="$HERMES_AGENT_ROOT/venv/bin/python"
+  [[ -x "$python_bin" ]] || return 1
+
+  if "$python_bin" -c "import telegram, aiohttp, qrcode" >> "$LOG_FILE" 2>&1; then
+    return 0
+  fi
+
+  uv_cmd="$HERMES_UV_CMD"
+  if [[ -z "$uv_cmd" ]]; then
+    uv_cmd="$(command -v uv 2>/dev/null || true)"
+  fi
+  [[ -n "$uv_cmd" && -x "$uv_cmd" ]] || return 1
+
+  printf "Official Hermes messaging extra is missing; installing it now.\n" >> "$LOG_FILE"
+  if ! (
+    cd "$HERMES_AGENT_ROOT" && \
+      UV_PROJECT_ENVIRONMENT="$HERMES_AGENT_ROOT/venv" \
+      "$uv_cmd" sync --extra all --extra messaging --locked
+  ) >> "$LOG_FILE" 2>&1; then
+    printf "Locked messaging sync failed; falling back to the official messaging extra.\n" >> "$LOG_FILE"
+    (
+      cd "$HERMES_AGENT_ROOT" && \
+        "$uv_cmd" pip install --python "$python_bin" -e ".[messaging]"
+    ) >> "$LOG_FILE" 2>&1 || return 1
+  fi
+
+  "$python_bin" -c "import telegram, aiohttp, qrcode" >> "$LOG_FILE" 2>&1
 }
 
 restart_hermes_after_rollback() {
@@ -159,7 +191,7 @@ refresh_official_hermes_runtime() {
     /bin/rm -rf "$workdir"
     return 1
   fi
-  if ! "$HERMES_AGENT_ROOT/venv/bin/python" -c "import telegram, aiohttp, qrcode" >> "$LOG_FILE" 2>&1; then
+  if ! ensure_hermes_messaging_support; then
     /bin/rm -rf "$HERMES_AGENT_ROOT"
     restore_runtime_backup_if_needed || true
     restart_hermes_after_rollback
@@ -594,6 +626,10 @@ restart_launch_agent() {
   fi
   /bin/launchctl kickstart -k "gui/$uid/$label" >/dev/null 2>&1
 }
+
+if [[ "${INFOBIZ_UPDATE_LIBRARY_ONLY:-0}" == "1" ]]; then
+  return 0
+fi
 
 [[ "$(/usr/bin/uname -s)" == "Darwin" ]] || fail "This updater supports macOS only."
 [[ -d "$HERMES_AGENT_ROOT" ]] || fail "Hermes is not installed. Run the full installer first."
