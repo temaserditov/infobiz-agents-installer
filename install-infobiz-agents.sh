@@ -63,17 +63,94 @@ PREVIOUS_HERMES_BACKUP=""
 PREVIOUS_WEB_SHELL_BACKUP=""
 INSTALLED_WEB_SHELL_URL=""
 INSTALL_COMPLETED=0
+INFOBIZ_VERBOSE="${INFOBIZ_VERBOSE:-0}"
+PROGRESS_VALUE=0
+PROGRESS_CEILING=0
+PROGRESS_ACTIVE=0
+PROGRESS_WIDTH=42
+
+is_quiet_ui() {
+  [[ "$INFOBIZ_VERBOSE" != "1" ]]
+}
+
+render_progress() {
+  is_quiet_ui || return 0
+  local value="$1"
+  local filled=$(((value * PROGRESS_WIDTH + 99) / 100))
+  local empty=$((PROGRESS_WIDTH - filled))
+  local filled_bar="" empty_bar=""
+  if (( filled > 0 )); then
+    filled_bar="$(printf '%*s' "$filled" '' | /usr/bin/tr ' ' '#')"
+  fi
+  if (( empty > 0 )); then
+    empty_bar="$(printf '%*s' "$empty" '')"
+  fi
+  if [[ -t 2 ]]; then
+    printf "\r\033[2K\033[32m[%s%s]\033[0m %3d%%" "$filled_bar" "$empty_bar" "$value" >&2
+  else
+    printf "\r[%s%s] %3d%%" "$filled_bar" "$empty_bar" "$value" >&2
+  fi
+  PROGRESS_ACTIVE=1
+}
+
+progress_set() {
+  local value="$1"
+  (( value < PROGRESS_VALUE )) && value="$PROGRESS_VALUE"
+  (( value > 100 )) && value=100
+  PROGRESS_VALUE="$value"
+  render_progress "$PROGRESS_VALUE"
+}
+
+progress_ceiling() {
+  PROGRESS_CEILING="$1"
+}
+
+progress_pulse() {
+  is_quiet_ui || return 0
+  if (( PROGRESS_VALUE < PROGRESS_CEILING )); then
+    progress_set $((PROGRESS_VALUE + 1))
+  else
+    render_progress "$PROGRESS_VALUE"
+  fi
+}
+
+progress_break() {
+  if is_quiet_ui && (( PROGRESS_ACTIVE == 1 )); then
+    printf "\n" >&2
+    PROGRESS_ACTIVE=0
+  fi
+}
+
+progress_begin() {
+  is_quiet_ui || return 0
+  printf "Установка агентов\n" >&2
+  progress_set 1
+}
+
+progress_finish() {
+  progress_set 100
+  progress_break
+}
 
 say() {
+  if is_quiet_ui; then
+    printf "[%s] %s\n" "$(/bin/date '+%Y-%m-%d %H:%M:%S')" "$1" >> "$LOG_FILE"
+    return 0
+  fi
   printf "\n==> %s\n" "$1"
 }
 
 fail() {
   start_failure_support_server || true
-  printf "\nERROR: %s\n" "$1" >&2
-  printf "Log file: %s\n" "$LOG_FILE" >&2
+  progress_break
+  printf "\nУстановка остановлена.\n" >&2
+  printf "Логи: %s\n" "$LOG_FILE" >&2
+  printf "Причина: %s\n" "$1" >> "$LOG_FILE"
+  if ! is_quiet_ui; then
+    printf "ERROR: %s\n" "$1" >&2
+  fi
   if [[ -n "$FAILURE_SUPPORT_STARTED" ]]; then
-    printf "Support URL: %s\n" "$FAILURE_SUPPORT_STARTED" >&2
+    printf "Поддержка: %s\n" "$FAILURE_SUPPORT_STARTED" >&2
   fi
   exit 1
 }
@@ -121,7 +198,9 @@ run_logged() {
   shift
   local start now elapsed exit_code
   start="$(/bin/date +%s)"
-  printf "   %s... 0s" "$label"
+  if ! is_quiet_ui; then
+    printf "   %s... 0s" "$label"
+  fi
   {
     printf "\n\n[%s] %s\n" "$(/bin/date '+%Y-%m-%d %H:%M:%S')" "$label"
     printf "Command:"
@@ -131,9 +210,13 @@ run_logged() {
   "$@" >> "$LOG_FILE" 2>&1 &
   local pid="$!"
   while kill -0 "$pid" >/dev/null 2>&1; do
-    now="$(/bin/date +%s)"
-    elapsed=$((now - start))
-    printf "\r   %s... %s" "$label" "$(format_seconds "$elapsed")"
+    if is_quiet_ui; then
+      progress_pulse
+    else
+      now="$(/bin/date +%s)"
+      elapsed=$((now - start))
+      printf "\r   %s... %s" "$label" "$(format_seconds "$elapsed")"
+    fi
     sleep 1
   done
   set +e
@@ -142,10 +225,12 @@ run_logged() {
   set -e
   now="$(/bin/date +%s)"
   elapsed=$((now - start))
-  if (( exit_code == 0 )); then
-    printf "\r   %s... done in %s\n" "$label" "$(format_seconds "$elapsed")"
-  else
-    printf "\r   %s... failed after %s\n" "$label" "$(format_seconds "$elapsed")"
+  if ! is_quiet_ui; then
+    if (( exit_code == 0 )); then
+      printf "\r   %s... done in %s\n" "$label" "$(format_seconds "$elapsed")"
+    else
+      printf "\r   %s... failed after %s\n" "$label" "$(format_seconds "$elapsed")"
+    fi
   fi
   return "$exit_code"
 }
@@ -262,9 +347,24 @@ JS
 download_file() {
   local url="$1"
   local output="$2"
-  printf "   Downloading: %s\n" "$url" >&2
   printf "Downloading: %s\n" "$url" >> "$LOG_FILE"
-  curl -fL --progress-bar "$url" -o "$output" 2> >(/usr/bin/tee -a "$LOG_FILE" >&2)
+  if ! is_quiet_ui; then
+    printf "   Downloading: %s\n" "$url" >&2
+    curl -fL --progress-bar "$url" -o "$output" 2> >(/usr/bin/tee -a "$LOG_FILE" >&2)
+    return $?
+  fi
+
+  curl -fL --silent --show-error "$url" -o "$output" >> "$LOG_FILE" 2>&1 &
+  local pid="$!" exit_code
+  while kill -0 "$pid" >/dev/null 2>&1; do
+    progress_pulse
+    sleep 1
+  done
+  set +e
+  wait "$pid"
+  exit_code=$?
+  set -e
+  return "$exit_code"
 }
 
 install_command_shims() {
@@ -290,7 +390,8 @@ run_hermes_auth() {
   HERMES_HOME="$HERMES_ROOT" \
     INSTALL_NAME_TOOL="$SHIM_DIR/install_name_tool" \
     PATH="$SHIM_DIR:$HERMES_ROOT/node/bin:$HERMES_AGENT_ROOT/venv/bin:$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
-    "$HERMES_AGENT_ROOT/venv/bin/python" - "$HERMES_CMD" auth add openai-codex <<'PY'
+    INFOBIZ_VERBOSE="$INFOBIZ_VERBOSE" \
+    "$HERMES_AGENT_ROOT/venv/bin/python" - "$LOG_FILE" "$HERMES_CMD" auth add openai-codex <<'PY'
 import os
 import pty
 import re
@@ -298,7 +399,9 @@ import select
 import subprocess
 import sys
 
-argv = sys.argv[1:]
+log_path = sys.argv[1]
+argv = sys.argv[2:]
+verbose = os.environ.get("INFOBIZ_VERBOSE") == "1"
 url_re = re.compile(r"https?://[^\s)>\]\"']+")
 ansi_re = re.compile(r"\x1b\[[0-9;]*m")
 code_re = re.compile(r"\b[A-Z0-9][A-Z0-9 -]{3,30}[A-Z0-9]\b")
@@ -308,7 +411,7 @@ buffer = ""
 
 
 def notify(message):
-    os.write(sys.stdout.fileno(), f"\n   {message}\n".encode())
+    os.write(sys.stdout.fileno(), f"{message}\n".encode())
 
 
 def open_url(url):
@@ -321,7 +424,10 @@ def open_url(url):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        notify("Opened authorization page in your browser.")
+        if verbose:
+            notify("Opened authorization page in your browser.")
+        else:
+            notify(f"Авторизуйтесь в OpenAI:\n{url}")
     except OSError:
         pass
 
@@ -341,7 +447,10 @@ def copy_code(code, context):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        notify(f"Copied authorization code to clipboard: {code}")
+        if verbose:
+            notify(f"Copied authorization code to clipboard: {code}")
+        else:
+            notify(f"Код: {code}\nОжидаю авторизацию...")
     except OSError:
         pass
 
@@ -384,8 +493,12 @@ try:
                 break
             if not data:
                 break
-            os.write(sys.stdout.fileno(), data)
-            inspect_output(data.decode(errors="ignore"))
+            text = data.decode(errors="ignore")
+            with open(log_path, "a", encoding="utf-8") as log:
+                log.write(text)
+            if verbose:
+                os.write(sys.stdout.fileno(), data)
+            inspect_output(text)
         finished_pid, status = os.waitpid(pid, os.WNOHANG)
         if finished_pid:
             exit_status = os.waitstatus_to_exitcode(status)
@@ -973,7 +1086,7 @@ install_profiles_and_skills() {
     if [[ -d "$profile_root" ]]; then
       backup="$HOME/.hermes.profile-$profile.backup.$(/bin/date +%Y%m%d%H%M%S)"
       /bin/mv "$profile_root" "$backup"
-      printf "Existing profile %s moved to %s\n" "$profile" "$backup"
+      printf "Existing profile %s moved to %s\n" "$profile" "$backup" >> "$LOG_FILE"
     fi
 
     create_clean_hermes_profile "$profile" || fail "Could not create clean Hermes profile: $profile"
@@ -1301,12 +1414,13 @@ is_infobiz_managed_install() {
   [[ "$profile_count" -ge 2 ]]
 }
 
-say "Starting Infobiz Agents installer: $AGENT_NAME"
-printf "Detected Mac architecture: %s\n" "$ARCH"
 mkdir -p "$INSTALL_ROOT" "$CONFIG_DIR"
 : > "$LOG_FILE"
 printf "Infobiz Agents install log\nStarted: %s\nMac architecture: %s\n" "$(/bin/date)" "$ARCH" >> "$LOG_FILE"
 trap cleanup EXIT
+progress_begin
+say "Starting Infobiz Agents installer: $AGENT_NAME"
+progress_set 2
 
 if [[ "$FORCE_REINSTALL" != "1" ]] && is_infobiz_managed_install; then
   say "Existing Infobiz installation found; running safe update"
@@ -1314,7 +1428,17 @@ if [[ "$FORCE_REINSTALL" != "1" ]] && is_infobiz_managed_install; then
   CLEANUP_WORKDIR="$update_script"
   /usr/bin/curl -fsSL "$UPDATE_SCRIPT_URL" -o "$update_script" || fail "Could not download safe updater"
   /bin/chmod 700 "$update_script"
-  VERSION="$VERSION" BASE_URL="$BASE_URL" /bin/zsh "$update_script"
+  progress_set 10
+  progress_ceiling 95
+  run_logged "Updating Infobiz Agents" /usr/bin/env \
+    INFOBIZ_VERBOSE="$INFOBIZ_VERBOSE" VERSION="$VERSION" BASE_URL="$BASE_URL" \
+    /bin/zsh "$update_script" || fail "Could not update Infobiz Agents"
+  progress_finish
+  if [[ -f "$INSTALL_ROOT/web-shell.url" ]]; then
+    printf "Готово: %s\n" "$(/usr/bin/head -n 1 "$INSTALL_ROOT/web-shell.url")"
+  else
+    printf "Готово.\n"
+  fi
   exit 0
 fi
 
@@ -1330,57 +1454,80 @@ if [[ -d "$HERMES_ROOT" ]]; then
   if [[ "$existing_was_infobiz" != "1" ]]; then
     : > "$backup/.infobiz-restore-eligible"
   fi
-  printf "Existing ~/.hermes moved to %s\n" "$backup"
+  printf "Existing ~/.hermes moved to %s\n" "$backup" >> "$LOG_FILE"
 fi
 /bin/mkdir -p "$HERMES_ROOT"
+progress_set 4
+progress_ceiling 10
 ensure_uv || fail "Could not install uv"
+progress_set 10
+progress_ceiling 18
 install_node_runtime || fail "Could not install Node.js runtime"
+progress_set 18
+progress_ceiling 45
 install_hermes_from_source || fail "Official Hermes setup failed"
+progress_set 45
+progress_ceiling 52
 patch_hermes_image_reference_support >> "$LOG_FILE" 2>&1 || fail "Could not patch Hermes image reference support"
 patch_telegram_text_photo_merge_support >> "$LOG_FILE" 2>&1 || fail "Could not patch Telegram text/photo merge support"
 patch_hermes_local_media_markdown_support >> "$LOG_FILE" 2>&1 || fail "Could not patch Hermes local media Markdown support"
+progress_set 52
 
 [[ -x "$HERMES_CMD" ]] || fail "Hermes command not found: $HERMES_CMD"
 
 say "Installing agent profiles: $AGENT_NAME"
+progress_ceiling 60
 profile_payload="$(need_profile_payload)"
 workdir="$(mktemp -d "${TMPDIR:-/tmp}/infobiz-profile.XXXXXX")"
 CLEANUP_WORKDIR="$workdir"
 run_logged "Extracting agent profiles" /usr/bin/tar -xzf "$profile_payload" -C "$workdir" || fail "Could not extract agent profiles"
+progress_ceiling 68
 install_profiles_and_skills "$profile_payload" "$workdir"
 patch_agents_russian_only >> "$LOG_FILE" 2>&1 || fail "Could not patch Russian-only agent language"
+progress_set 68
 
 say "OpenAI/Hermes authorization"
-printf "The installer will open the authorization page and copy the code when Hermes prints it.\n"
+progress_set 70
+progress_break
 run_hermes_auth || fail "OpenAI/Hermes authorization failed"
-apply_best_available_model || fail "Could not select an available OpenAI model"
+progress_set 72
+progress_ceiling 80
+run_logged "Selecting best available OpenAI model" apply_best_available_model \
+  || fail "Could not select an available OpenAI model"
 patch_hermes_codex_runtime_safety >> "$LOG_FILE" 2>&1 || fail "Could not patch Hermes Codex runtime safety"
 patch_hermes_telegram_reliability >> "$LOG_FILE" 2>&1 || fail "Could not patch Telegram delivery reliability"
 repair_hermes_session_history >> "$LOG_FILE" 2>&1 || fail "Could not repair incomplete session history"
+progress_set 80
 
 say "Installing Hermes gateway services"
+progress_ceiling 87
 run_hermes gateway install --force >> "$LOG_FILE" 2>&1 || fail "Could not install Hermes gateway service"
 for profile in "${(@s:,:)AGENT_PROFILES}"; do
   profile="$(printf "%s" "$profile" | /usr/bin/xargs)"
   [[ -n "$profile" ]] || continue
   run_hermes -p "$profile" gateway install --force >> "$LOG_FILE" 2>&1 || fail "Could not install gateway service: $profile"
 done
+progress_set 87
 
 say "Starting Hermes gateways"
+progress_ceiling 92
 run_hermes gateway start >> "$LOG_FILE" 2>&1 || fail "Could not start Hermes gateway"
 for profile in "${(@s:,:)AGENT_PROFILES}"; do
   profile="$(printf "%s" "$profile" | /usr/bin/xargs)"
   [[ -n "$profile" ]] || continue
   run_hermes -p "$profile" gateway start >> "$LOG_FILE" 2>&1 || fail "Could not start gateway: $profile"
 done
+progress_set 92
 
 say "Configuring terminal PATH for 'hermes'"
 persist_local_bin_path
 
 say "Installing local web panel"
+progress_ceiling 97
 install_web_shell || fail "Could not install local web panel"
 web_shell_url="$INSTALLED_WEB_SHELL_URL"
 [[ -n "$web_shell_url" ]] || fail "Web panel URL was not created"
+progress_set 97
 
 say "Creating Applications shortcut"
 web_shell_app="$(install_web_shell_launcher)" || fail "Could not create web panel shortcut"
@@ -1391,8 +1538,13 @@ if [[ -n "$PREVIOUS_WEB_SHELL_BACKUP" ]]; then
 fi
 INSTALL_COMPLETED=1
 say "Done"
-printf "Installed %s. Open the web panel to configure Telegram and use the agent:\n" "$AGENT_NAME"
-printf "%s\n" "$web_shell_url"
-printf "Shortcut: %s\n" "$web_shell_app"
-printf "Log file: %s\n" "$LOG_FILE"
-printf "\nTerminal command 'hermes' is ready. Open a NEW terminal window (or run: source ~/.zshrc), then verify with: hermes --version\n"
+progress_finish
+if is_quiet_ui; then
+  printf "Готово: %s\n" "$web_shell_url"
+else
+  printf "Installed %s. Open the web panel to configure Telegram and use the agent:\n" "$AGENT_NAME"
+  printf "%s\n" "$web_shell_url"
+  printf "Shortcut: %s\n" "$web_shell_app"
+  printf "Log file: %s\n" "$LOG_FILE"
+  printf "\nTerminal command 'hermes' is ready. Open a NEW terminal window (or run: source ~/.zshrc), then verify with: hermes --version\n"
+fi
