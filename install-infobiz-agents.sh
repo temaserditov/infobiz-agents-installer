@@ -1327,19 +1327,22 @@ PLIST
 }
 
 install_web_shell_launcher() {
-  local app_parent app_path executable info_plist
+  local app_parent app_path executable info_plist icon_source
   app_parent="/Applications"
   if ! /bin/mkdir -p "$app_parent" >/dev/null 2>&1 || [[ ! -w "$app_parent" ]]; then
     app_parent="$HOME/Applications"
     /bin/mkdir -p "$app_parent"
   fi
 
-  app_path="$app_parent/Infobiz Agents.app"
+  app_path="$app_parent/HERMES.app"
   executable="$app_path/Contents/MacOS/open-web-panel"
   info_plist="$app_path/Contents/Info.plist"
+  icon_source="$WEB_SHELL_ROOT/assets/HERMES.icns"
+  [[ -f "$icon_source" ]] || return 1
 
   /bin/rm -rf "$app_path"
   /bin/mkdir -p "$app_path/Contents/MacOS" "$app_path/Contents/Resources"
+  /bin/cp "$icon_source" "$app_path/Contents/Resources/HERMES.icns"
 
   cat > "$info_plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -1347,13 +1350,15 @@ install_web_shell_launcher() {
 <plist version="1.0">
 <dict>
   <key>CFBundleDisplayName</key>
-  <string>Infobiz Agents</string>
+  <string>HERMES</string>
   <key>CFBundleExecutable</key>
   <string>open-web-panel</string>
   <key>CFBundleIdentifier</key>
-  <string>com.infobiz.agents.launcher</string>
+  <string>com.infobiz.hermes.launcher</string>
+  <key>CFBundleIconFile</key>
+  <string>HERMES.icns</string>
   <key>CFBundleName</key>
-  <string>Infobiz Agents</string>
+  <string>HERMES</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -1385,8 +1390,10 @@ uid="$(/usr/bin/id -u)"
 APP
 
   /bin/chmod +x "$executable"
+  /bin/rm -rf "/Applications/Infobiz Agents.app" "$HOME/Applications/Infobiz Agents.app" >/dev/null 2>&1 || true
   /usr/bin/xattr -dr com.apple.quarantine "$app_path" >/dev/null 2>&1 || true
   /usr/bin/xattr -dr com.apple.provenance "$app_path" >/dev/null 2>&1 || true
+  /usr/bin/touch "$app_path"
   printf "%s" "$app_path"
 }
 

@@ -5,6 +5,7 @@ import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { redactSensitiveText, redactSupportLogText, redactSupportValue } from "./lib/redaction.mjs";
+import { buildCodexSupportArchive, codexSupportFilename } from "./lib/codex-package.mjs";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const PORT = Number(process.env.PORT || 8787);
@@ -36,6 +37,7 @@ const DOCS_PATH = join(__dirname, "docs.json");
 const INFOBIZ_CONFIG_DIR = process.env.INFOBIZ_CONFIG_DIR || join(HOME_DIR, ".infobiz-agents");
 const VOICE_POLICY_PATH = process.env.INFOBIZ_VOICE_POLICY_PATH || join(INFOBIZ_CONFIG_DIR, "voice-policy.json");
 const PUBLIC_AVATARS_DIR = join(__dirname, "public", "assets", "avatars");
+const SUPPORT_DOCS_DIR = join(__dirname, "public", "support-docs");
 
 mkdirSync(RUNS_DIR, { recursive: true });
 mkdirSync(APPROVALS_DIR, { recursive: true });
@@ -84,7 +86,7 @@ const OPENAI_CODEX_MODEL_OPTIONS = (process.env.INFOBIZ_MODEL_OPTIONS || "gpt-5.
 const OPENAI_CODEX_MODEL_FALLBACK = process.env.INFOBIZ_MODEL_FALLBACK || "gpt-5.4-mini";
 const MODEL_DISCOVERY_TTL_MS = 60_000;
 const MODEL_PROBE_TTL_MS = 10 * 60_000;
-let modelDiscoveryCache = { at: 0, models: [] };
+let modelDiscoveryCache = { at: 0, models: [], accountModels: [], planType: "" };
 const modelProbeCache = new Map();
 const GROQ_STT_MODEL_OPTIONS = (process.env.INFOBIZ_STT_GROQ_MODELS || "whisper-large-v3-turbo,whisper-large-v3,distil-whisper-large-v3-en")
   .split(",")
@@ -1199,9 +1201,10 @@ function runChildCapture(command, args, { cwd, env, timeoutMs = 30_000, maxOutpu
 async function discoverOpenAICodexModels({ force = false } = {}) {
   const now = Date.now();
   if (!force && modelDiscoveryCache.models.length && now - modelDiscoveryCache.at < MODEL_DISCOVERY_TTL_MS) {
-    return modelDiscoveryCache.models;
+    return modelDiscoveryCache;
   }
   const code = String.raw`
+import base64
 import json
 
 from hermes_cli.codex_models import get_codex_model_ids
@@ -1212,7 +1215,23 @@ try:
 except Exception:
     token = None
 
-print(json.dumps(get_codex_model_ids(token), ensure_ascii=True))
+plan_type = ""
+if token and token.count(".") >= 2:
+    try:
+        payload_part = token.split(".")[1]
+        payload_part += "=" * (-len(payload_part) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_part.encode()).decode())
+        auth = payload.get("https://api.openai.com/auth", {})
+        plan_type = str(
+            payload.get("chatgpt_plan_type")
+            or payload.get("plan_type")
+            or (auth.get("chatgpt_plan_type") if isinstance(auth, dict) else "")
+            or ""
+        ).lower()
+    except Exception:
+        plan_type = ""
+
+print(json.dumps({"models": get_codex_model_ids(token), "planType": plan_type}, ensure_ascii=True))
 `;
   const result = await runChildCapture(HERMES_PYTHON, ["-c", code], {
     cwd: HERMES_AGENT_ROOT,
@@ -1220,20 +1239,28 @@ print(json.dumps(get_codex_model_ids(token), ensure_ascii=True))
     timeoutMs: 15_000,
   });
   let discovered = [];
+  let planType = "";
   if (result.status === 0) {
     try {
-      const line = String(result.stdout || "").trim().split(/\r?\n/).at(-1) || "[]";
+      const line = String(result.stdout || "").trim().split(/\r?\n/).at(-1) || "{}";
       const parsed = JSON.parse(line);
       if (Array.isArray(parsed)) discovered = parsed;
+      if (parsed && typeof parsed === "object" && Array.isArray(parsed.models)) {
+        discovered = parsed.models;
+        planType = String(parsed.planType || "").trim().toLowerCase();
+      }
     } catch {
       discovered = [];
     }
   }
+  const accountModels = [...new Set(discovered)]
+    .map((item) => String(item || "").trim())
+    .filter((item) => /^[a-z0-9][a-z0-9._-]{1,80}$/i.test(item));
   const models = [...new Set([...discovered, ...OPENAI_CODEX_MODEL_OPTIONS])]
     .map((item) => String(item || "").trim())
     .filter((item) => /^[a-z0-9][a-z0-9._-]{1,80}$/i.test(item));
-  modelDiscoveryCache = { at: now, models };
-  return models;
+  modelDiscoveryCache = { at: now, models, accountModels, planType };
+  return modelDiscoveryCache;
 }
 
 async function probeOpenAICodexModel(agentId, model) {
@@ -1271,14 +1298,17 @@ async function modelSettingsAll() {
   const profiles = PROFILE_ORDER
     .filter((id) => existsSync(profileDir(id)))
     .map((id) => modelSettings(id));
+  const catalog = await discoverOpenAICodexModels();
   const options = [...new Set([
-    ...await discoverOpenAICodexModels(),
+    ...catalog.models,
     ...profiles.map((profile) => profile.model).filter(Boolean),
   ])];
   return {
     ok: true,
     provider: "openai-codex",
     options,
+    planType: catalog.planType,
+    freeModels: catalog.planType === "free" ? catalog.accountModels : [],
     fallback: OPENAI_CODEX_MODEL_FALLBACK,
     profiles,
     models: [...new Set(profiles.map((profile) => profile.model).filter(Boolean))].sort(),
@@ -1288,7 +1318,7 @@ async function modelSettingsAll() {
 async function validateOpenAICodexModel(model) {
   const value = String(model || "").trim();
   if (!value) throw new Error("model is required");
-  if (!(await discoverOpenAICodexModels()).includes(value)) {
+  if (!(await discoverOpenAICodexModels()).models.includes(value)) {
     throw new Error(`unsupported model: ${value}`);
   }
   return value;
@@ -3409,6 +3439,7 @@ function webToolPolicySummary() {
 function routeSummary() {
   const routes = [
     { method: "GET", path: "/api/agents", group: "agents", description: "список профилей и статус gateway" },
+    { method: "GET", path: "/api/support/codex-package", group: "support", description: "документация и безопасная диагностика для Codex" },
     { method: "GET", path: "/api/support/bundle", group: "support", description: "read-only пакет диагностики для временной поддержки" },
     { method: "GET", path: "/api/control-center", group: "diagnostics", description: "короткий верхний статус ключевых diagnostics checks" },
     { method: "GET", path: "/api/next-fixes", group: "diagnostics", description: "автоматический список следующих безопасных фиксов" },
@@ -3616,6 +3647,67 @@ function supportBundle() {
     services: supportSection("services", () => supportServiceSummary()),
   };
   return redactSupportValue(bundle);
+}
+
+function safeSshIdentity(rawValue) {
+  const raw = String(rawValue || "").trim();
+  if (!raw) return null;
+  const at = raw.lastIndexOf("@");
+  const requestedUser = at > 0 ? raw.slice(0, at) : "";
+  const requestedHost = at > 0 ? raw.slice(at + 1) : raw;
+  if (requestedUser && !/^[a-zA-Z0-9._-]+$/.test(requestedUser)) return null;
+  try {
+    const parsed = new URL(requestedHost.includes("://") ? requestedHost : `ssh://${requestedHost}`);
+    const host = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    if (!host || !/^[a-z0-9.:-]+$/.test(host) || LOOPBACK_BIND_HOSTS.has(host)) return null;
+    return { user: requestedUser, host };
+  } catch {
+    return null;
+  }
+}
+
+function requestHostIdentity(req) {
+  const forwarded = String(req.headers["x-forwarded-host"] || "").split(",")[0].trim();
+  return safeSshIdentity(forwarded || String(req.headers.host || "").trim());
+}
+
+function codexConnectionEnvironment(req) {
+  const environment = {
+    generatedAt: new Date().toISOString(),
+    platform: process.platform,
+    arch: process.arch,
+    installRoot: INSTALL_ROOT,
+    supportDocsPath: SUPPORT_DOCS_DIR,
+    sshTarget: "",
+    sshTargetSource: "",
+  };
+  if (process.platform !== "linux") return environment;
+
+  const candidates = [
+    { value: process.env.INFOBIZ_SSH_TARGET, source: "INFOBIZ_SSH_TARGET" },
+    { value: readText(join(INSTALL_ROOT, "web-shell.url"), ""), source: "адрес WebShell" },
+    { value: requestHostIdentity(req), source: "адрес текущего WebShell" },
+  ];
+  const defaultUser = String(process.env.INFOBIZ_SSH_USER || process.env.USER || process.env.LOGNAME || "root").trim();
+  const safeDefaultUser = /^[a-zA-Z0-9._-]+$/.test(defaultUser) ? defaultUser : "root";
+  for (const candidate of candidates) {
+    const identity = candidate.value && typeof candidate.value === "object"
+      ? candidate.value
+      : safeSshIdentity(candidate.value);
+    if (!identity) continue;
+    environment.sshTarget = `${identity.user || safeDefaultUser}@${identity.host}`;
+    environment.sshTargetSource = candidate.source;
+    break;
+  }
+  return environment;
+}
+
+function codexSupportPackage(req) {
+  return buildCodexSupportArchive({
+    docsDir: SUPPORT_DOCS_DIR,
+    diagnostics: supportBundle(),
+    environment: codexConnectionEnvironment(req),
+  });
 }
 
 function createSnapshot() {
@@ -3927,6 +4019,17 @@ function sendJson(res, status, payload) {
   res.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
     "Content-Length": Buffer.byteLength(body),
+    "Cache-Control": "no-store",
+  });
+  res.end(body);
+}
+
+function sendDownload(res, body, filename, contentType = "application/octet-stream") {
+  const safeFilename = String(filename || "download.bin").replace(/[^a-zA-Z0-9._-]/g, "-");
+  res.writeHead(200, {
+    "Content-Type": contentType,
+    "Content-Length": body.length,
+    "Content-Disposition": `attachment; filename="${safeFilename}"`,
     "Cache-Control": "no-store",
   });
   res.end(body);
@@ -4425,6 +4528,12 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/api/agents") {
       sendJson(res, 200, { agents: listAgents() });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/support/codex-package") {
+      const archive = codexSupportPackage(req);
+      sendDownload(res, archive, codexSupportFilename(), "application/zip");
       return;
     }
 

@@ -636,6 +636,63 @@ ensure_mac_services() {
 PLIST
 }
 
+ensure_web_shell_launcher() {
+  local app_parent app_path executable info_plist icon_source
+  app_parent="/Applications"
+  if ! /bin/mkdir -p "$app_parent" >/dev/null 2>&1 || [[ ! -w "$app_parent" ]]; then
+    app_parent="$HOME/Applications"
+    /bin/mkdir -p "$app_parent"
+  fi
+
+  app_path="$app_parent/HERMES.app"
+  executable="$app_path/Contents/MacOS/open-web-panel"
+  info_plist="$app_path/Contents/Info.plist"
+  icon_source="$WEB_SHELL_ROOT/assets/HERMES.icns"
+  [[ -f "$icon_source" ]] || return 1
+
+  /bin/rm -rf "$app_path"
+  /bin/mkdir -p "$app_path/Contents/MacOS" "$app_path/Contents/Resources"
+  /bin/cp "$icon_source" "$app_path/Contents/Resources/HERMES.icns"
+
+  cat > "$info_plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDisplayName</key><string>HERMES</string>
+  <key>CFBundleExecutable</key><string>open-web-panel</string>
+  <key>CFBundleIdentifier</key><string>com.infobiz.hermes.launcher</string>
+  <key>CFBundleIconFile</key><string>HERMES.icns</string>
+  <key>CFBundleName</key><string>HERMES</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
+  <key>CFBundleVersion</key><string>$VERSION</string>
+  <key>LSMinimumSystemVersion</key><string>11.0</string>
+</dict>
+</plist>
+PLIST
+
+  cat > "$executable" <<'APP'
+#!/bin/zsh
+set -euo pipefail
+
+url_file="$HOME/InfobizAgents/web-shell.url"
+label="com.infobiz.agents.web-shell"
+url="http://127.0.0.1:8787"
+[[ -f "$url_file" ]] && url="$(/usr/bin/head -n 1 "$url_file")"
+
+uid="$(/usr/bin/id -u)"
+/bin/launchctl kickstart -k "gui/$uid/$label" >/dev/null 2>&1 || true
+/usr/bin/open "$url"
+APP
+
+  /bin/chmod +x "$executable"
+  /bin/rm -rf "/Applications/Infobiz Agents.app" "$HOME/Applications/Infobiz Agents.app" >/dev/null 2>&1 || true
+  /usr/bin/xattr -dr com.apple.quarantine "$app_path" >/dev/null 2>&1 || true
+  /usr/bin/xattr -dr com.apple.provenance "$app_path" >/dev/null 2>&1 || true
+  /usr/bin/touch "$app_path"
+}
+
 restart_launch_agent() {
   local label="$1"
   local plist="$2"
@@ -706,6 +763,7 @@ repair_hermes_session_history >> "$LOG_FILE" 2>&1 || fail "Could not repair inco
 
 say "Repairing service definitions"
 ensure_mac_services >> "$LOG_FILE" 2>&1 || fail "Could not repair gateway or WebShell services"
+ensure_web_shell_launcher >> "$LOG_FILE" 2>&1 || fail "Could not create HERMES application shortcut"
 
 say "Restarting gateways"
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"

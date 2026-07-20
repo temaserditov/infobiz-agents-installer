@@ -19,7 +19,9 @@ node --check "$SOURCE/server.mjs"
 node --check "$SOURCE/public/app.js"
 node --check "$SOURCE/scripts/smoke.mjs"
 node "$SOURCE/scripts/redaction-smoke.mjs"
+node "$SOURCE/scripts/codex-package-smoke.mjs"
 python3 -m py_compile "$SOURCE/runner.py"
+node "$REPO_ROOT/scripts/build-codex-support-package.mjs" >/dev/null
 
 mkdir -p "$OUT_DIR"
 COPYFILE_DISABLE=1 tar --uid 0 --gid 0 \

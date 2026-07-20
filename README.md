@@ -5,6 +5,21 @@ Internal installer payload repository.
 Student-facing installs should go through the token gate on `school.serditov.ru`.
 Do not send raw GitHub or GitHub Releases commands to students.
 
+Student/Codex support documentation is bundled into WebShell and installed at:
+
+```text
+~/InfobizAgents/web-shell/public/support-docs/START_HERE.md
+```
+
+The WebShell control panel has one `Скачать пакет для Codex` button. It creates
+a ZIP with the runbook, `AGENTS.md`, a ready prompt, connection hints, and
+redacted live diagnostics. Secrets are excluded. The diagnostics-free fallback
+for the school site is built at:
+
+```text
+dist/infobiz-agents-codex-support.zip
+```
+
 Windows student command:
 
 ```powershell
@@ -45,7 +60,7 @@ runtime setup to Hermes' own `setup-hermes.sh` in non-interactive mode:
   the bundled WebShell
 - The local web panel is installed into `~/InfobizAgents/web-shell` and started
   as a user LaunchAgent
-- An `Infobiz Agents.app` launcher is created in `/Applications` when possible,
+- A `HERMES.app` launcher with the bundled portrait icon is created in `/Applications` when possible,
   otherwise in `~/Applications`
 - Telegram Bot Token is configured in the web panel after install, not in the
   terminal installer

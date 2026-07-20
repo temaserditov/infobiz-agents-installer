@@ -850,7 +850,7 @@ async function loadControlPanel(message = "") {
   if (modelResult.status === "fulfilled") state.modelSettings = modelResult.value;
   if (voiceResult.status === "fulfilled") state.voiceSettings = voiceResult.value;
   const partialFailure = [agentsResult, healthResult, telegramResult, modelResult, voiceResult].some((result) => result.status === "rejected");
-  state.controlMessage = message || (partialFailure ? "Часть данных не загрузилась. Попробуй обновить страницу или скачай диагностику." : "");
+  state.controlMessage = message || (partialFailure ? "Часть данных не загрузилась. Попробуй обновить страницу или скачай пакет для Codex." : "");
   renderAgents();
   renderControlPanel();
 }
@@ -950,6 +950,11 @@ function renderControlPanel() {
   }
 }
 
+function modelDisplayLabel(model) {
+  const freeModels = new Set(state.modelSettings?.freeModels || []);
+  return freeModels.has(model) ? `${model} (FREE)` : model;
+}
+
 function renderModelSettings(message = "") {
   const settings = state.modelSettings;
   const profiles = settings?.profiles || [];
@@ -963,7 +968,7 @@ function renderModelSettings(message = "") {
   els.modelAgentRows.innerHTML = profiles.map((profile) => {
     const current = profile.current || fallback;
     const optionHtml = options.map((model) => `
-      <option value="${escapeHtml(model)}"${model === current ? " selected" : ""}>${escapeHtml(model)}</option>
+      <option value="${escapeHtml(model)}"${model === current ? " selected" : ""}>${escapeHtml(modelDisplayLabel(model))}</option>
     `).join("");
     return `
       <div class="model-settings-row">
@@ -1183,24 +1188,29 @@ async function restartAllGateways() {
   }
 }
 
-async function downloadDiagnosticsBundle() {
+async function downloadCodexSupportPackage() {
   els.downloadDiagnostics.disabled = true;
+  const originalText = els.downloadDiagnostics.textContent;
+  els.downloadDiagnostics.textContent = "Собираю пакет…";
   try {
-    const data = await api("/api/export");
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const response = await fetch("/api/support/codex-package");
+    if (!response.ok) throw new Error(await response.text());
+    const blob = await response.blob();
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const disposition = response.headers.get("Content-Disposition") || "";
+    const fileName = disposition.match(/filename="([^"]+)"/i)?.[1];
     link.href = url;
-    link.download = `infobiz-logs-${stamp}.json`;
+    link.download = fileName || "infobiz-agents-codex-support.zip";
     document.body.appendChild(link);
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
-    state.controlMessage = "Логи скачаны.";
+    state.controlMessage = "Пакет готов. Загрузите ZIP в Codex и опишите проблему своими словами.";
     renderControlPanel();
   } finally {
     els.downloadDiagnostics.disabled = false;
+    els.downloadDiagnostics.textContent = originalText;
   }
 }
 
@@ -1299,7 +1309,7 @@ function openModelModal(agentId) {
     ? "Сейчас модель выбрана вручную. После сохранения gateway агента перезапустится автоматически."
     : "Сейчас модель выбрана установщиком автоматически. Можно вручную выбрать доступную модель.";
   els.modelModalSelect.innerHTML = options.map((model) => `
-    <option value="${escapeHtml(model)}"${model === current ? " selected" : ""}>${escapeHtml(model)}</option>
+    <option value="${escapeHtml(model)}"${model === current ? " selected" : ""}>${escapeHtml(modelDisplayLabel(model))}</option>
   `).join("");
   els.modelModal.hidden = false;
   window.setTimeout(() => els.modelModalSelect.focus(), 0);
@@ -4041,8 +4051,8 @@ els.restartAllGateways.addEventListener("click", () => restartAllGateways().catc
   state.controlMessage = `Не удалось перезапустить gateway: ${error.message}`;
   renderControlPanel();
 }));
-els.downloadDiagnostics.addEventListener("click", () => downloadDiagnosticsBundle().catch((error) => {
-  state.controlMessage = `Не удалось скачать диагностику: ${error.message}`;
+els.downloadDiagnostics.addEventListener("click", () => downloadCodexSupportPackage().catch((error) => {
+  state.controlMessage = `Не удалось собрать пакет для Codex: ${error.message}`;
   renderControlPanel();
 }));
 els.telegramModalClose.addEventListener("click", closeTelegramModal);

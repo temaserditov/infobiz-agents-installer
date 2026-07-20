@@ -2739,8 +2739,9 @@ button:disabled {
 
 .control-hero-actions .settings-save,
 .control-hero-actions .mini-action {
-  width: 180px;
-  min-width: 180px;
+  width: 210px;
+  min-width: 210px;
+  height: 42px;
   margin: 0;
 }
 
