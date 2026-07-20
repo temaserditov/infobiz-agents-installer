@@ -29,6 +29,8 @@ PUBLIC_HOST="${PUBLIC_HOST:-}"
 WEB_SHELL_PUBLIC_URL="${WEB_SHELL_PUBLIC_URL:-}"
 WEB_SHELL_ACCESS_TOKEN="${WEB_SHELL_ACCESS_TOKEN:-}"
 STUDENT_UI="${STUDENT_UI:-1}"
+INFOBIZ_INSIDE_TMUX="${INFOBIZ_INSIDE_TMUX:-0}"
+TMUX_SESSION_NAME="${TMUX_SESSION_NAME:-infobiz-agents-install}"
 
 INSTALL_ROOT="${INSTALL_ROOT:-$HOME/InfobizAgents}"
 HERMES_ROOT="${HERMES_ROOT:-$HOME/.hermes}"
@@ -69,9 +71,7 @@ render_progress() {
   spaces="$(printf '%*s' "$empty" '')"
   printf "\033[2J\033[H"
   printf "Идет установка агентов\n\n"
-  printf "%s\n\n" "$label"
   printf "[\033[32m%s\033[0m%s] %s%%\n" "$bar" "$spaces" "$percent"
-  printf "\nЭто может занять несколько минут. Подробный лог пишется на сервере.\n"
 }
 
 progress_stage() {
@@ -190,6 +190,37 @@ detect_public_host() {
     ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
   fi
   printf "%s" "$ip"
+}
+
+ensure_tmux_session() {
+  [[ "$STUDENT_UI" == "1" ]] || return 0
+  [[ "$INFOBIZ_INSIDE_TMUX" != "1" ]] || return 0
+
+  if ! command -v tmux >/dev/null 2>&1; then
+    command -v apt-get >/dev/null 2>&1 || fail "tmux is not installed and apt-get is unavailable"
+    printf "Installing tmux for a resumable install session.\n" >> "$LOG_FILE"
+    apt-get update -qq >> "$LOG_FILE" 2>&1 || fail "Could not update packages for tmux"
+    apt-get install -y -qq tmux >> "$LOG_FILE" 2>&1 || fail "Could not install tmux"
+  fi
+
+  local stable_script="$INSTALL_ROOT/install-vps-infobiz-agents.sh"
+  local source_script="${BASH_SOURCE[0]}"
+  if [[ -r "$source_script" ]]; then
+    cp "$source_script" "$stable_script"
+  else
+    curl -fsSL "https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/install-vps-infobiz-agents.sh" \
+      -o "$stable_script" >> "$LOG_FILE" 2>&1 || fail "Could not prepare resumable installer"
+  fi
+  chmod 700 "$stable_script"
+
+  local tmux_command
+  printf -v tmux_command \
+    'INFOBIZ_INSIDE_TMUX=1 STUDENT_UI=%q VERSION=%q BASE_URL=%q PROFILE_URL=%q WEB_SHELL_URL=%q PUBLIC_HOST=%q WEB_SHELL_PUBLIC_URL=%q bash %q' \
+    "$STUDENT_UI" "$VERSION" "$BASE_URL" "$PROFILE_URL" "$WEB_SHELL_URL" \
+    "$PUBLIC_HOST" "$WEB_SHELL_PUBLIC_URL" "$stable_script"
+
+  export TERM="${TERM:-xterm-256color}"
+  exec tmux new-session -A -s "$TMUX_SESSION_NAME" "$tmux_command"
 }
 
 require_linux() {
@@ -852,16 +883,109 @@ open_firewall_if_available() {
 }
 
 run_openai_auth() {
-  if [[ "$STUDENT_UI" == "1" ]]; then
-    printf "\033[2J\033[H"
-    printf "Нужна авторизация OpenAI\n\n"
-    printf "Сейчас появится ссылка и код. Открой ссылку на своем компьютере или телефоне,\n"
-    printf "введи код, и установка продолжится автоматически.\n\n"
-  else
+  if [[ "$STUDENT_UI" != "1" ]]; then
     say "OpenAI/Hermes authorization"
     printf "Follow the device-code instructions below. Open the URL on your computer or phone.\n"
+    run_hermes auth add openai-codex
+    return
   fi
-  run_hermes auth add openai-codex
+
+  printf "\033[2J\033[H"
+  HERMES_HOME="$HERMES_ROOT" \
+  PATH="$HERMES_ROOT/node/bin:$HERMES_AGENT_ROOT/venv/bin:$HOME/.local/bin:$PATH" \
+  "$HERMES_AGENT_ROOT/venv/bin/python" - "$LOG_FILE" "$HERMES_CMD" auth add openai-codex <<'PY'
+import os
+import pty
+import re
+import select
+import sys
+
+log_path = sys.argv[1]
+argv = sys.argv[2:]
+url_re = re.compile(r"https?://[^\s)>\]\"']+")
+ansi_re = re.compile(r"\x1b\[[0-9;]*m")
+code_re = re.compile(r"\b[A-Z0-9][A-Z0-9 -]{3,30}[A-Z0-9]\b")
+shown_urls = set()
+shown_codes = set()
+buffer = ""
+
+
+def show(message):
+    os.write(sys.stdout.fileno(), f"{message}\n".encode())
+
+
+def show_url(url):
+    if url in shown_urls:
+        return
+    shown_urls.add(url)
+    show(f"Авторизуйтесь в OpenAI:\n{url}")
+
+
+def show_code(code, context):
+    if code in shown_codes or "code" not in context.lower():
+        return
+    shown_codes.add(code)
+    show(f"Код: {code}\nОжидаю авторизацию...")
+
+
+def inspect_output(text):
+    global buffer
+    buffer = (buffer + text)[-4000:]
+    plain_text = ansi_re.sub("", text)
+    plain_buffer = ansi_re.sub("", buffer).replace("\r", "\n")
+    for match in url_re.findall(plain_text):
+        show_url(match.rstrip(".,;:"))
+    lower = plain_buffer.lower()
+    marker = lower.rfind("enter this code")
+    if marker < 0:
+        marker = lower.rfind("authorization code")
+    if marker >= 0:
+        context = plain_buffer[marker:marker + 500]
+        for raw in code_re.findall(context):
+            code = re.sub(r"\s+", "-", raw.strip())
+            if len(code.replace("-", "")) >= 4:
+                show_code(code, "code: " + context)
+
+
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(argv[0], argv)
+
+exit_status = 1
+child_done = False
+try:
+    while True:
+        readable, _, _ = select.select([fd], [], [], 0.2)
+        if fd in readable:
+            try:
+                data = os.read(fd, 4096)
+            except OSError:
+                break
+            if not data:
+                break
+            text = data.decode(errors="ignore")
+            with open(log_path, "a", encoding="utf-8") as log:
+                log.write(text)
+            inspect_output(text)
+        finished_pid, status = os.waitpid(pid, os.WNOHANG)
+        if finished_pid:
+            exit_status = os.waitstatus_to_exitcode(status)
+            child_done = True
+            break
+finally:
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    if not child_done:
+        try:
+            _, status = os.waitpid(pid, 0)
+            exit_status = os.waitstatus_to_exitcode(status)
+        except ChildProcessError:
+            pass
+
+sys.exit(exit_status)
+PY
 }
 
 is_infobiz_managed_install() {
@@ -882,6 +1006,7 @@ main() {
   printf "Infobiz Agents VPS install log\nStarted: %s\n" "$(date)" >> "$LOG_FILE"
   [[ "$STUDENT_UI" == "1" ]] && render_progress "Подготовка"
   require_linux
+  ensure_tmux_session
 
   if [[ "$FORCE_REINSTALL" != "1" ]] && is_infobiz_managed_install; then
     say "Existing Infobiz installation found; running safe update"
@@ -920,7 +1045,8 @@ main() {
   progress_stage "Создание агентов и установка скиллов"
   install_profiles_and_skills
   patch_agents_russian_only >> "$LOG_FILE" 2>&1 || fail "Could not patch Russian-only agent language"
-  run_openai_auth
+  run_openai_auth || fail "OpenAI authorization failed"
+  [[ "$STUDENT_UI" == "1" ]] && render_progress ""
   apply_best_available_model
   patch_hermes_codex_runtime_safety >> "$LOG_FILE" 2>&1 || fail "Could not patch Hermes Codex runtime safety"
   patch_hermes_telegram_reliability >> "$LOG_FILE" 2>&1 || fail "Could not patch Telegram delivery reliability"
