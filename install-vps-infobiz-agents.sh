@@ -247,14 +247,18 @@ ensure_tmux_session() {
     "$STUDENT_UI" "$VERSION" "$BASE_URL" "$PROFILE_URL" "$WEB_SHELL_URL" \
     "$PUBLIC_HOST" "$WEB_SHELL_PUBLIC_URL" "$stable_script"
 
-  export TERM="${TERM:-xterm-256color}"
-  if [[ ! -r /dev/tty || ! -w /dev/tty ]]; then
+  case "${TERM:-}" in
+    ""|dumb|unknown) export TERM="xterm-256color" ;;
+  esac
+  local terminal_path
+  terminal_path="$(readlink "/proc/$$/fd/1" 2>/dev/null || true)"
+  if [[ "$terminal_path" != /dev/pts/* && "$terminal_path" != /dev/tty* ]]; then
     printf "No controlling terminal; continuing without tmux.\n" >> "$LOG_FILE"
     return 0
   fi
 
   set +e
-  tmux new-session -A -s "$TMUX_SESSION_NAME" "$tmux_command" </dev/tty >/dev/tty 2>/dev/tty
+  tmux new-session -A -s "$TMUX_SESSION_NAME" "$tmux_command" <"$terminal_path"
   tmux_exit_code=$?
   set -e
   exit "$tmux_exit_code"
