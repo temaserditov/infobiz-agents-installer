@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 AGENT_PROFILES="${AGENT_PROFILES:-marketer,copywriter,designer,tech}"
 AGENT_PROFILE_ALLOW="${AGENT_PROFILE_ALLOW:-default,marketer,copywriter,designer,tech}"
@@ -47,6 +47,10 @@ PROGRESS_TOTAL=11
 PREVIOUS_HERMES_BACKUP=""
 PREVIOUS_WEB_SHELL_BACKUP=""
 INSTALL_COMPLETED=0
+CURRENT_STAGE="Подготовка"
+FAILURE_MESSAGE=""
+ERROR_LINE=""
+ERROR_COMMAND=""
 
 export DEBIAN_FRONTEND=noninteractive
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HERMES_ROOT/node/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
@@ -76,6 +80,7 @@ render_progress() {
 
 progress_stage() {
   local label="$1"
+  CURRENT_STAGE="$label"
   if (( PROGRESS_STEP < PROGRESS_TOTAL )); then
     PROGRESS_STEP=$((PROGRESS_STEP + 1))
   fi
@@ -83,15 +88,23 @@ progress_stage() {
 }
 
 fail() {
+  FAILURE_MESSAGE="$1"
   [[ "$STUDENT_UI" == "1" ]] && printf "\n"
   printf "\nERROR: %s\n" "$1" >&2
   printf "Log file: %s\n" "$LOG_FILE" >&2
   exit 1
 }
 
+record_error() {
+  local exit_code="$1"
+  ERROR_LINE="$2"
+  ERROR_COMMAND="$3"
+  return "$exit_code"
+}
+
 cleanup() {
   local exit_code=$?
-  trap - EXIT
+  trap - ERR EXIT
   rm -rf "$TMP_ROOT"
   if [[ "$exit_code" != "0" && "$INSTALL_COMPLETED" != "1" \
     && -n "$PREVIOUS_HERMES_BACKUP" && -d "$PREVIOUS_HERMES_BACKUP" ]]; then
@@ -111,8 +124,22 @@ cleanup() {
       printf "WARNING: could not restore previous WebShell from %s\n" "$PREVIOUS_WEB_SHELL_BACKUP" >> "$LOG_FILE"
     fi
   fi
+  if [[ "$exit_code" != "0" && "$INSTALL_COMPLETED" != "1" && "$STUDENT_UI" == "1" ]]; then
+    printf "\033[2J\033[H"
+    printf "Установка остановилась.\n\n"
+    printf "Этап: %s\n" "$CURRENT_STAGE"
+    if [[ -n "$FAILURE_MESSAGE" ]]; then
+      printf "Причина: %s\n" "$FAILURE_MESSAGE"
+    else
+      printf "Причина: внутренняя команда завершилась с кодом %s" "$exit_code"
+      [[ -n "$ERROR_LINE" ]] && printf " (строка %s)" "$ERROR_LINE"
+      printf ".\n"
+    fi
+    printf "Лог: %s\n" "$LOG_FILE"
+  fi
   exit "$exit_code"
 }
+trap 'record_error "$?" "$LINENO" "$BASH_COMMAND"' ERR
 trap cleanup EXIT
 
 format_seconds() {
@@ -130,6 +157,7 @@ run_logged() {
   local label="$1"
   shift
   local start now elapsed exit_code pid
+  CURRENT_STAGE="$label"
   start="$(date +%s)"
   if [[ "$STUDENT_UI" != "1" ]]; then
     printf "   %s... 0s" "$label"
@@ -213,14 +241,18 @@ ensure_tmux_session() {
   fi
   chmod 700 "$stable_script"
 
-  local tmux_command
+  local tmux_command tmux_exit_code
   printf -v tmux_command \
-    'INFOBIZ_INSIDE_TMUX=1 STUDENT_UI=%q VERSION=%q BASE_URL=%q PROFILE_URL=%q WEB_SHELL_URL=%q PUBLIC_HOST=%q WEB_SHELL_PUBLIC_URL=%q bash %q' \
+    'INFOBIZ_INSIDE_TMUX=1 STUDENT_UI=%q VERSION=%q BASE_URL=%q PROFILE_URL=%q WEB_SHELL_URL=%q PUBLIC_HOST=%q WEB_SHELL_PUBLIC_URL=%q bash %q; install_status=$?; printf "\n"; if (( install_status == 0 )); then printf "Готово. Сохраните ссылку на панель выше.\n"; else printf "Установка завершилась с ошибкой. Причина и путь к логу указаны выше.\n"; fi; printf "\nНажмите Enter, чтобы вернуться в консоль..."; read -r _; exit "$install_status"' \
     "$STUDENT_UI" "$VERSION" "$BASE_URL" "$PROFILE_URL" "$WEB_SHELL_URL" \
     "$PUBLIC_HOST" "$WEB_SHELL_PUBLIC_URL" "$stable_script"
 
   export TERM="${TERM:-xterm-256color}"
-  exec tmux new-session -A -s "$TMUX_SESSION_NAME" "$tmux_command"
+  set +e
+  tmux new-session -A -s "$TMUX_SESSION_NAME" "$tmux_command"
+  tmux_exit_code=$?
+  set -e
+  exit "$tmux_exit_code"
 }
 
 require_linux() {
