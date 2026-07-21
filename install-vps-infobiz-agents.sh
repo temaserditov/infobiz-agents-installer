@@ -248,8 +248,13 @@ ensure_tmux_session() {
     "$PUBLIC_HOST" "$WEB_SHELL_PUBLIC_URL" "$stable_script"
 
   export TERM="${TERM:-xterm-256color}"
+  if [[ ! -r /dev/tty || ! -w /dev/tty ]]; then
+    printf "No controlling terminal; continuing without tmux.\n" >> "$LOG_FILE"
+    return 0
+  fi
+
   set +e
-  tmux new-session -A -s "$TMUX_SESSION_NAME" "$tmux_command"
+  tmux new-session -A -s "$TMUX_SESSION_NAME" "$tmux_command" </dev/tty >/dev/tty 2>/dev/tty
   tmux_exit_code=$?
   set -e
   exit "$tmux_exit_code"
