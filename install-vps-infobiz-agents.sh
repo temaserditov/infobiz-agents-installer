@@ -258,11 +258,12 @@ ensure_tmux_session() {
 require_linux() {
   [[ "$(uname -s)" == "Linux" ]] || fail "VPS installer supports Linux only"
   if [[ -r /etc/os-release ]]; then
-    # shellcheck disable=SC1091
-    . /etc/os-release
-    case "${ID:-}" in
+    local os_id os_pretty
+    os_id="$(. /etc/os-release; printf "%s" "${ID:-}")"
+    os_pretty="$(. /etc/os-release; printf "%s" "${PRETTY_NAME:-unknown}")"
+    case "$os_id" in
       ubuntu|debian) ;;
-      *) printf "WARNING: tested on Ubuntu/Debian, current OS: %s\n" "${PRETTY_NAME:-unknown}" ;;
+      *) printf "WARNING: tested on Ubuntu/Debian, current OS: %s\n" "$os_pretty" ;;
     esac
   fi
 }
