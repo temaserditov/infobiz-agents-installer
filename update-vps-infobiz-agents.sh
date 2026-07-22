@@ -34,15 +34,74 @@ WEB_SHELL_HOST_EXPLICIT="${WEB_SHELL_HOST+x}"
 WEB_SHELL_HOST="${WEB_SHELL_HOST:-0.0.0.0}"
 AGENT_PROFILE_ALLOW="${AGENT_PROFILE_ALLOW:-default,marketer,copywriter,designer,tech}"
 SYSTEMD_UNIT_DIR="${SYSTEMD_UNIT_DIR:-/etc/systemd/system}"
+STUDENT_UI="${STUDENT_UI:-0}"
+CURL_CONNECT_TIMEOUT="${CURL_CONNECT_TIMEOUT:-10}"
+CURL_MAX_TIME="${CURL_MAX_TIME:-180}"
+UPDATE_PROGRESS_STEP=0
+UPDATE_PROGRESS_TOTAL=16
+UPDATE_PROGRESS_START="${UPDATE_PROGRESS_START:-0}"
+UPDATE_PROGRESS_END="${UPDATE_PROGRESS_END:-100}"
+
+render_update_progress() {
+  [[ "$STUDENT_UI" == "1" ]] || return 0
+  local label="$1"
+  local percent=$((UPDATE_PROGRESS_START + UPDATE_PROGRESS_STEP * (UPDATE_PROGRESS_END - UPDATE_PROGRESS_START) / UPDATE_PROGRESS_TOTAL))
+  local width=42
+  local filled=$((percent * width / 100))
+  local empty=$((width - filled))
+  local bar spaces
+  bar="$(printf '%*s' "$filled" '' | tr ' ' '#')"
+  spaces="$(printf '%*s' "$empty" '')"
+  printf "\033[2J\033[H"
+  printf "Обновление агентов\n\n"
+  printf "%s\n\n" "$label"
+  printf "[\033[32m%s\033[0m%s] %s%%\n" "$bar" "$spaces" "$percent"
+  printf "\nНе закрывайте терминал. Сетевые загрузки ограничены по времени и повторяются автоматически.\n"
+}
+
+update_stage() {
+  local label="$1"
+  if (( UPDATE_PROGRESS_STEP < UPDATE_PROGRESS_TOTAL )); then
+    UPDATE_PROGRESS_STEP=$((UPDATE_PROGRESS_STEP + 1))
+  fi
+  render_update_progress "$label"
+}
 
 say() {
-  printf "==> %s\n" "$1"
+  if [[ "$STUDENT_UI" == "1" ]]; then
+    update_stage "$1"
+    printf "[%s] %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >> "$LOG_FILE"
+  else
+    printf "==> %s\n" "$1"
+  fi
 }
 
 fail() {
   printf "\nERROR: %s\n" "$1" >&2
   printf "Log file: %s\n" "$LOG_FILE" >&2
   exit 1
+}
+
+download_file() {
+  local url="$1"
+  local output="$2"
+  printf "Downloading: %s\n" "${url%%\?*}" >> "$LOG_FILE"
+  curl -fsSL \
+    --connect-timeout "$CURL_CONNECT_TIMEOUT" \
+    --max-time "$CURL_MAX_TIME" \
+    --retry 2 \
+    --retry-delay 2 \
+    --retry-all-errors \
+    "$url" -o "$output" >> "$LOG_FILE" 2>&1
+}
+
+acquire_install_lock() {
+  [[ "${INFOBIZ_INSTALL_LOCK_HELD:-0}" == "1" ]] && return 0
+  command -v flock >/dev/null 2>&1 \
+    || fail "flock is unavailable; use Ubuntu 22.04/24.04 or Debian 11+"
+  exec 9>"$INSTALL_ROOT/.install.lock"
+  flock -n 9 \
+    || fail "Another Infobiz Agents install or update is already running on this VPS"
 }
 
 patch_official_hermes_setup_at() {
@@ -125,7 +184,7 @@ refresh_official_hermes_runtime() {
     return 0
   fi
 
-  if ! curl -fsSL "$tarball_url" -o "$source_tarball"; then rm -rf "$workdir"; return 1; fi
+  if ! download_file "$tarball_url" "$source_tarball"; then rm -rf "$workdir"; return 1; fi
   mkdir -p "$staged"
   if ! tar --strip-components=1 -xzf "$source_tarball" -C "$staged"; then rm -rf "$workdir"; return 1; fi
   if [[ ! -f "$staged/pyproject.toml" || ! -f "$staged/setup-hermes.sh" ]]; then rm -rf "$workdir"; return 1; fi
@@ -311,7 +370,7 @@ download_and_run_python_patch() {
   local url="$1" patcher patch_status
   shift
   patcher="$(mktemp "${TMPDIR:-/tmp}/infobiz-patch.XXXXXX")" || return 1
-  if curl -fsSL "$url" -o "$patcher"; then
+  if download_file "$url" "$patcher"; then
     if "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" "$@"; then patch_status=0; else patch_status=$?; fi
   else
     patch_status=$?
@@ -417,7 +476,7 @@ update_web_shell() {
   local workdir payload
   workdir="$(mktemp -d "${TMPDIR:-/tmp}/infobiz-web-shell.XXXXXX")" || return 1
   payload="$workdir/agent-web-shell.tar.gz"
-  if ! curl -fsSL "$WEB_SHELL_URL" -o "$payload" \
+  if ! download_file "$WEB_SHELL_URL" "$payload" \
     || ! tar -xzf "$payload" -C "$workdir" \
     || [[ ! -d "$workdir/web-shell/public" || ! -d "$workdir/web-shell/scripts" ]]; then
     rm -rf "$workdir"
@@ -524,7 +583,7 @@ update_agent_profiles() {
   local workdir payload profile source_dir
   workdir="$(mktemp -d "${TMPDIR:-/tmp}/infobiz-profile.XXXXXX")" || return 1
   payload="$workdir/profile.tar.gz"
-  curl -fsSL "$PROFILE_URL" -o "$payload" || { rm -rf "$workdir"; return 1; }
+  download_file "$PROFILE_URL" "$payload" || { rm -rf "$workdir"; return 1; }
   tar -xzf "$payload" -C "$workdir" || { rm -rf "$workdir"; return 1; }
   [[ -d "$workdir/profile/agents" ]] || { rm -rf "$workdir"; return 1; }
   validate_profile_payload "$workdir/profile" || { rm -rf "$workdir"; return 1; }
@@ -660,6 +719,7 @@ SERVICE
 [[ -x "$HERMES_AGENT_ROOT/venv/bin/python" ]] || fail "Hermes Python venv is missing. Run the full installer first."
 
 mkdir -p "$INSTALL_ROOT"
+acquire_install_lock
 : > "$LOG_FILE"
 
 say "Updating official Hermes runtime"
@@ -724,3 +784,6 @@ if command -v systemctl >/dev/null 2>&1; then
 fi
 
 say "Patch complete"
+if [[ "$STUDENT_UI" == "1" ]]; then
+  printf "\nОбновление завершено.\n"
+fi

@@ -30,10 +30,30 @@ WEB_SHELL_PUBLIC_URL="${WEB_SHELL_PUBLIC_URL:-}"
 WEB_SHELL_ACCESS_TOKEN="${WEB_SHELL_ACCESS_TOKEN:-}"
 STUDENT_UI="${STUDENT_UI:-1}"
 INFOBIZ_INSIDE_TMUX="${INFOBIZ_INSIDE_TMUX:-0}"
-TMUX_SESSION_NAME="${TMUX_SESSION_NAME:-infobiz-agents-install}"
-
+TMUX_SESSION_NAME="${TMUX_SESSION_NAME:-}"
+CURL_CONNECT_TIMEOUT="${CURL_CONNECT_TIMEOUT:-10}"
+CURL_MAX_TIME="${CURL_MAX_TIME:-180}"
+TMUX_BOOTSTRAP_TIMEOUT="${TMUX_BOOTSTRAP_TIMEOUT:-300}"
+TMUX_STATUS_WAIT_SECONDS="${TMUX_STATUS_WAIT_SECONDS:-3600}"
 INSTALL_ROOT="${INSTALL_ROOT:-$HOME/InfobizAgents}"
 HERMES_ROOT="${HERMES_ROOT:-$HOME/.hermes}"
+
+session_key_for_value() {
+  local value="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s' "$value" | sha256sum | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    printf '%s' "$value" | shasum -a 256 | awk '{print $1}'
+  else
+    printf '%s' "$value" | cksum | awk '{print $1}'
+  fi
+}
+
+if [[ -z "$TMUX_SESSION_NAME" ]]; then
+  TMUX_SESSION_KEY="$(session_key_for_value "$INSTALL_ROOT")"
+  TMUX_SESSION_NAME="infobiz-agents-install-v2-${TMUX_SESSION_KEY:0:12}"
+fi
+
 HERMES_AGENT_ROOT="$HERMES_ROOT/hermes-agent"
 WEB_SHELL_ROOT="$INSTALL_ROOT/web-shell"
 LOG_FILE="$INSTALL_ROOT/install.log"
@@ -75,7 +95,9 @@ render_progress() {
   spaces="$(printf '%*s' "$empty" '')"
   printf "\033[2J\033[H"
   printf "Идет установка агентов\n\n"
+  printf "%s\n\n" "$label"
   printf "[\033[32m%s\033[0m%s] %s%%\n" "$bar" "$spaces" "$percent"
+  printf "\nНе закрывайте терминал. Если сеть замедлится, установщик повторит загрузку сам.\n"
 }
 
 progress_stage() {
@@ -198,12 +220,24 @@ run_logged() {
 download_file() {
   local url="$1"
   local output="$2"
-  [[ "$STUDENT_UI" != "1" ]] && printf "   Downloading: %s\n" "$url"
-  printf "Downloading: %s\n" "$url" >> "$LOG_FILE"
+  [[ "$STUDENT_UI" != "1" ]] && printf "   Downloading: %s\n" "${url%%\?*}"
+  printf "Downloading: %s\n" "${url%%\?*}" >> "$LOG_FILE"
   if [[ "$STUDENT_UI" == "1" ]]; then
-    curl -fsSL "$url" -o "$output" >> "$LOG_FILE" 2>&1
+    curl -fsSL \
+      --connect-timeout "$CURL_CONNECT_TIMEOUT" \
+      --max-time "$CURL_MAX_TIME" \
+      --retry 2 \
+      --retry-delay 2 \
+      --retry-all-errors \
+      "$url" -o "$output" >> "$LOG_FILE" 2>&1
   else
-    curl -fL --progress-bar "$url" -o "$output" 2> >(tee -a "$LOG_FILE" >&2)
+    curl -fL --progress-bar \
+      --connect-timeout "$CURL_CONNECT_TIMEOUT" \
+      --max-time "$CURL_MAX_TIME" \
+      --retry 2 \
+      --retry-delay 2 \
+      --retry-all-errors \
+      "$url" -o "$output" 2> >(tee -a "$LOG_FILE" >&2)
   fi
 }
 
@@ -220,6 +254,14 @@ detect_public_host() {
   printf "%s" "$ip"
 }
 
+acquire_install_lock() {
+  command -v flock >/dev/null 2>&1 \
+    || fail "flock is unavailable; use Ubuntu 22.04/24.04 or Debian 11+"
+  exec 9>"$INSTALL_ROOT/.install.lock"
+  flock -n 9 \
+    || fail "Another Infobiz Agents install or update is already running on this VPS"
+}
+
 ensure_tmux_session() {
   [[ "$STUDENT_UI" == "1" ]] || return 0
   [[ "$INFOBIZ_INSIDE_TMUX" != "1" ]] || return 0
@@ -227,25 +269,42 @@ ensure_tmux_session() {
   if ! command -v tmux >/dev/null 2>&1; then
     command -v apt-get >/dev/null 2>&1 || fail "tmux is not installed and apt-get is unavailable"
     printf "Installing tmux for a resumable install session.\n" >> "$LOG_FILE"
-    apt-get update -qq >> "$LOG_FILE" 2>&1 || fail "Could not update packages for tmux"
-    apt-get install -y -qq tmux >> "$LOG_FILE" 2>&1 || fail "Could not install tmux"
+    timeout "$TMUX_BOOTSTRAP_TIMEOUT" apt-get update -qq >> "$LOG_FILE" 2>&1 \
+      || fail "Could not update packages for tmux"
+    timeout "$TMUX_BOOTSTRAP_TIMEOUT" apt-get install -y -qq tmux >> "$LOG_FILE" 2>&1 \
+      || fail "Could not install tmux"
   fi
 
   local stable_script="$INSTALL_ROOT/install-vps-infobiz-agents.sh"
+  local stable_tmp="${stable_script}.tmp.$$"
   local source_script="${BASH_SOURCE[0]}"
-  if [[ -r "$source_script" ]]; then
-    cp "$source_script" "$stable_script"
-  else
-    curl -fsSL "https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/install-vps-infobiz-agents.sh" \
-      -o "$stable_script" >> "$LOG_FILE" 2>&1 || fail "Could not prepare resumable installer"
+  local status_file="$INSTALL_ROOT/.${TMUX_SESSION_NAME}.status"
+  local session_exists=0
+  if tmux has-session -t "$TMUX_SESSION_NAME" >/dev/null 2>&1; then
+    session_exists=1
   fi
-  chmod 700 "$stable_script"
 
-  local tmux_command tmux_exit_code
+  if (( session_exists == 0 )); then
+    if [[ -r "$source_script" ]]; then
+      cp "$source_script" "$stable_tmp" \
+        || fail "Could not prepare resumable installer"
+    else
+      download_file \
+        "https://raw.githubusercontent.com/temaserditov/infobiz-agents-installer/main/install-vps-infobiz-agents.sh" \
+        "$stable_tmp" || fail "Could not prepare resumable installer"
+    fi
+    chmod 700 "$stable_tmp"
+    mv -f "$stable_tmp" "$stable_script"
+    rm -f -- "$status_file"
+  fi
+
+  local tmux_command tmux_client_exit_code installer_exit_code waited
   printf -v tmux_command \
-    'INFOBIZ_INSIDE_TMUX=1 STUDENT_UI=%q VERSION=%q BASE_URL=%q PROFILE_URL=%q WEB_SHELL_URL=%q PUBLIC_HOST=%q WEB_SHELL_PUBLIC_URL=%q bash %q; install_status=$?; printf "\n"; if (( install_status == 0 )); then printf "Готово. Сохраните ссылку на панель выше.\n"; else printf "Установка завершилась с ошибкой. Причина и путь к логу указаны выше.\n"; fi; printf "\nНажмите Enter, чтобы вернуться в консоль..."; read -r _; exit "$install_status"' \
+    'set +e; INFOBIZ_INSIDE_TMUX=1 STUDENT_UI=%q VERSION=%q BASE_URL=%q PROFILE_URL=%q WEB_SHELL_URL=%q PUBLIC_HOST=%q WEB_SHELL_PUBLIC_URL=%q INSTALL_ROOT=%q HERMES_ROOT=%q TMUX_SESSION_NAME=%q CURL_CONNECT_TIMEOUT=%q CURL_MAX_TIME=%q FORCE_REINSTALL=%q bash %q; install_status=$?; status_file=%q; status_tmp="${status_file}.tmp.$$"; if ! printf "%%s\n" "$install_status" > "$status_tmp" || ! mv -f "$status_tmp" "$status_file"; then printf "\nНе удалось сохранить результат установки.\n"; exit 125; fi; printf "\n"; if [ "$install_status" -eq 0 ]; then printf "Готово. Возвращаюсь в основную консоль...\n"; else printf "Установка завершилась с ошибкой. Причина и путь к логу указаны выше.\n"; fi; exit "$install_status"' \
     "$STUDENT_UI" "$VERSION" "$BASE_URL" "$PROFILE_URL" "$WEB_SHELL_URL" \
-    "$PUBLIC_HOST" "$WEB_SHELL_PUBLIC_URL" "$stable_script"
+    "$PUBLIC_HOST" "$WEB_SHELL_PUBLIC_URL" "$INSTALL_ROOT" "$HERMES_ROOT" \
+    "$TMUX_SESSION_NAME" "$CURL_CONNECT_TIMEOUT" "$CURL_MAX_TIME" "$FORCE_REINSTALL" \
+    "$stable_script" "$status_file"
 
   case "${TERM:-}" in
     ""|dumb|unknown) export TERM="xterm-256color" ;;
@@ -259,9 +318,41 @@ ensure_tmux_session() {
 
   set +e
   tmux new-session -A -s "$TMUX_SESSION_NAME" "$tmux_command" <"$terminal_path"
-  tmux_exit_code=$?
+  tmux_client_exit_code=$?
   set -e
-  exit "$tmux_exit_code"
+
+  waited=0
+  while [[ ! -f "$status_file" ]] \
+    && tmux has-session -t "$TMUX_SESSION_NAME" >/dev/null 2>&1 \
+    && (( waited < TMUX_STATUS_WAIT_SECONDS )); do
+    sleep 1
+    waited=$((waited + 1))
+  done
+
+  installer_exit_code=""
+  if [[ -f "$status_file" ]]; then
+    installer_exit_code="$(head -n 1 "$status_file" 2>/dev/null || true)"
+  fi
+  if [[ ! "$installer_exit_code" =~ ^[0-9]{1,3}$ ]] \
+    || (( 10#$installer_exit_code > 255 )); then
+    installer_exit_code="$tmux_client_exit_code"
+    (( installer_exit_code != 0 )) || installer_exit_code=1
+  else
+    installer_exit_code=$((10#$installer_exit_code))
+  fi
+
+  printf "\033[2J\033[H"
+  if (( installer_exit_code == 0 )); then
+    printf "Установка завершена.\n"
+    if [[ -f "$INSTALL_ROOT/web-shell.url" ]]; then
+      printf "\nПанель агентов:\n%s\n" "$(head -n 1 "$INSTALL_ROOT/web-shell.url")"
+    fi
+  else
+    printf "Установка завершилась с ошибкой.\n"
+    printf "Лог: %s\n" "$LOG_FILE"
+  fi
+  INSTALL_COMPLETED=1
+  exit "$installer_exit_code"
 }
 
 require_linux() {
@@ -321,7 +412,8 @@ install_node_runtime() {
     return
   fi
   index_url="https://nodejs.org/dist/latest-v${NODE_VERSION}.x/"
-  tarball_name="$(curl -fsSL "$index_url" | grep -oE "node-v${NODE_VERSION}\.[0-9]+\.[0-9]+-linux-${node_arch}\.tar\.xz" | head -1 || true)"
+  tarball_name="$(curl -fsSL --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time 30 \
+    "$index_url" | grep -oE "node-v${NODE_VERSION}\.[0-9]+\.[0-9]+-linux-${node_arch}\.tar\.xz" | head -1 || true)"
   [[ -n "$tarball_name" ]] || fail "Could not find Node.js Linux build"
   download_url="${index_url}${tarball_name}"
   tmp_dir="$TMP_ROOT/node"
@@ -411,25 +503,25 @@ resolve_hermes_source() {
 
 patch_hermes_image_reference_support() {
   local patcher="$TMP_ROOT/patch-hermes-image-reference.py"
-  curl -fsSL "$HERMES_IMAGE_REFERENCE_PATCH_URL" -o "$patcher"
+  download_file "$HERMES_IMAGE_REFERENCE_PATCH_URL" "$patcher"
   "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" "$HERMES_AGENT_ROOT"
 }
 
 patch_telegram_text_photo_merge_support() {
   local patcher="$TMP_ROOT/patch-telegram-text-photo-merge.py"
-  curl -fsSL "$HERMES_TELEGRAM_TEXT_PHOTO_MERGE_PATCH_URL" -o "$patcher"
+  download_file "$HERMES_TELEGRAM_TEXT_PHOTO_MERGE_PATCH_URL" "$patcher"
   "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" "$HERMES_AGENT_ROOT"
 }
 
 patch_hermes_local_media_markdown_support() {
   local patcher="$TMP_ROOT/patch-hermes-local-media-markdown.py"
-  curl -fsSL "$HERMES_LOCAL_MEDIA_MARKDOWN_PATCH_URL" -o "$patcher"
+  download_file "$HERMES_LOCAL_MEDIA_MARKDOWN_PATCH_URL" "$patcher"
   "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" "$HERMES_AGENT_ROOT"
 }
 
 patch_hermes_codex_runtime_safety() {
   local patcher="$TMP_ROOT/patch-hermes-codex-runtime-safety.py"
-  curl -fsSL "$HERMES_RUNTIME_SAFETY_PATCH_URL" -o "$patcher"
+  download_file "$HERMES_RUNTIME_SAFETY_PATCH_URL" "$patcher"
   "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" \
     --hermes-root "$HERMES_ROOT" \
     --hermes-agent-root "$HERMES_AGENT_ROOT" \
@@ -438,13 +530,13 @@ patch_hermes_codex_runtime_safety() {
 
 patch_hermes_telegram_reliability() {
   local patcher="$TMP_ROOT/patch-hermes-telegram-reliability.py"
-  curl -fsSL "$HERMES_TELEGRAM_RELIABILITY_PATCH_URL" -o "$patcher"
+  download_file "$HERMES_TELEGRAM_RELIABILITY_PATCH_URL" "$patcher"
   "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" "$HERMES_AGENT_ROOT"
 }
 
 repair_hermes_session_history() {
   local patcher="$TMP_ROOT/repair-hermes-session-history.py"
-  curl -fsSL "$HERMES_SESSION_HISTORY_REPAIR_URL" -o "$patcher"
+  download_file "$HERMES_SESSION_HISTORY_REPAIR_URL" "$patcher"
   "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" \
     --hermes-root "$HERMES_ROOT" \
     --profiles "default,$AGENT_PROFILES" \
@@ -453,7 +545,7 @@ repair_hermes_session_history() {
 
 patch_agents_russian_only() {
   local patcher="$TMP_ROOT/patch-agent-russian-only.py"
-  curl -fsSL "$AGENT_RUSSIAN_ONLY_PATCH_URL" -o "$patcher"
+  download_file "$AGENT_RUSSIAN_ONLY_PATCH_URL" "$patcher"
   "$HERMES_AGENT_ROOT/venv/bin/python" "$patcher" \
     --hermes-root "$HERMES_ROOT" \
     --profiles "$AGENT_PROFILES"
@@ -1069,18 +1161,32 @@ is_infobiz_managed_install() {
 
 main() {
   mkdir -p "$INSTALL_ROOT" "$TMP_ROOT"
-  : > "$LOG_FILE"
-  printf "Infobiz Agents VPS install log\nStarted: %s\n" "$(date)" >> "$LOG_FILE"
-  [[ "$STUDENT_UI" == "1" ]] && render_progress "Подготовка"
+  touch "$LOG_FILE"
+  [[ "$STUDENT_UI" == "1" ]] && progress_stage "Подготовка терминала"
   require_linux
   ensure_tmux_session
+  acquire_install_lock
+  printf "\nInfobiz Agents VPS install log\nStarted: %s\n" "$(date)" >> "$LOG_FILE"
 
   if [[ "$FORCE_REINSTALL" != "1" ]] && is_infobiz_managed_install; then
     say "Existing Infobiz installation found; running safe update"
     local update_script="$TMP_ROOT/update-vps-infobiz-agents.sh"
-    curl -fsSL "$UPDATE_SCRIPT_URL" -o "$update_script" || fail "Could not download safe updater"
+    download_file "$UPDATE_SCRIPT_URL" "$update_script" || fail "Could not download safe updater"
     chmod 700 "$update_script"
-    VERSION="$VERSION" BASE_URL="$BASE_URL" bash "$update_script"
+    progress_stage "Обновление существующей установки"
+    STUDENT_UI="$STUDENT_UI" VERSION="$VERSION" BASE_URL="$BASE_URL" \
+      UPDATE_PROGRESS_START="$((PROGRESS_STEP * 100 / PROGRESS_TOTAL))" \
+      UPDATE_PROGRESS_END=99 \
+      CURL_CONNECT_TIMEOUT="$CURL_CONNECT_TIMEOUT" CURL_MAX_TIME="$CURL_MAX_TIME" \
+      PROFILE_URL="$PROFILE_URL" WEB_SHELL_URL="$WEB_SHELL_URL" \
+      INFOBIZ_INSTALL_LOCK_HELD=1 \
+      bash "$update_script"
+    INSTALL_COMPLETED=1
+    PROGRESS_STEP="$PROGRESS_TOTAL"
+    render_progress "Готово"
+    if [[ -f "$INSTALL_ROOT/web-shell.url" ]]; then
+      printf "\nПанель агентов:\n%s\n" "$(head -n 1 "$INSTALL_ROOT/web-shell.url")"
+    fi
     return 0
   fi
 
@@ -1157,4 +1263,6 @@ main() {
   fi
 }
 
-main "$@"
+if [[ "${INFOBIZ_INSTALLER_LIBRARY_ONLY:-0}" != "1" ]]; then
+  main "$@"
+fi
