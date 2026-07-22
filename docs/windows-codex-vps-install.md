@@ -45,10 +45,15 @@ VPS: root@SERVER_IP
 
 Правила:
 - не проси и не принимай пароль в чат;
-- если SSH попросит пароль, дай мне ввести его только в защищенный terminal prompt;
+- сначала проверь, есть ли на Windows SSH-клиент: выполни `where.exe ssh` и `ssh -V`;
+- если `ssh` не найден, не останавливайся на объяснении: установи Windows OpenSSH Client;
+- для установки OpenSSH Client используй admin/UAC-команду:
+  `Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile -ExecutionPolicy Bypass -Command "Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0"'`;
+- если Windows покажет UAC/админ-подтверждение, скажи мне подтвердить его и продолжай после установки;
+- после установки снова проверь `where.exe ssh` и `ssh -V`;
+- если SSH попросит пароль от VPS, дай мне ввести его только в защищенный terminal prompt;
 - не используй Windows PowerShell-установку агентов;
 - Windows нужен только для запуска Codex и SSH, установка должна идти на VPS;
-- если на Windows нет SSH-клиента, сначала проверь это и скажи, какое системное разрешение нужно;
 - если появится OpenAI device authorization, покажи мне URL и code в чате;
 - после моей авторизации проверь systemd gateway-сервисы и WebShell;
 - в конце прочитай `~/InfobizAgents/webshell-url.txt` или `~/InfobizAgents/web-shell.url` на VPS и верни кликабельную ссылку WebShell.
