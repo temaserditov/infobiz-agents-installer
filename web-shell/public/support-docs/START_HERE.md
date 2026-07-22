@@ -21,6 +21,9 @@
 
 Если агенты находятся на VPS, сначала подключите Codex к серверу по SSH. Codex
 должен выполнять диагностику на VPS, а не на локальном Windows-компьютере.
+Для установки с Windows через Codex используйте
+`WINDOWS_CODEX_VPS_INSTALL.md`: там есть готовый промт, который сначала
+проверяет/включает Windows OpenSSH Client, а потом ставит агентов на VPS.
 
 ## Что читать
 
@@ -28,7 +31,8 @@
 2. [SYSTEM_MAP.md](SYSTEM_MAP.md) — реальные пути, профили, сервисы и логи продукта.
 3. [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — решения по симптомам.
 4. [SECURITY_AND_ESCALATION.md](SECURITY_AND_ESCALATION.md) — секреты, резервные копии и эскалация.
-5. [OPENCLAW_SUPPORT_AUDIT.md](OPENCLAW_SUPPORT_AUDIT.md) — выводы из старых потоков; это не инструкция по ремонту Hermes.
+5. [WINDOWS_CODEX_VPS_INSTALL.md](WINDOWS_CODEX_VPS_INSTALL.md) — установка на VPS с Windows через Codex и OpenSSH.
+6. [OPENCLAW_SUPPORT_AUDIT.md](OPENCLAW_SUPPORT_AUDIT.md) — выводы из старых потоков; это не инструкция по ремонту Hermes.
 
 ## Главные правила
 
@@ -42,4 +46,3 @@
 - Нельзя переносить команды, конфиги и пути из OpenClaw.
 - Нельзя публиковать Telegram-токены, OAuth-данные, пароли VPS и ссылку WebShell
   с токеном доступа.
-
