@@ -31,12 +31,12 @@ shell_quote() {
   printf "%s" "$1" | sed "s/'/'\\\\''/g; 1s/^/'/; \$s/\$/'/"
 }
 
-random_token() {
-  if command -v openssl >/dev/null 2>&1; then
-    openssl rand -hex 24
-    return
-  fi
-  date +%s | shasum -a 256 | awk '{print $1}'
+generate_web_shell_access_token() {
+  local raw
+  raw="$(openssl rand -hex 8)" || return 1
+  [[ "$raw" =~ ^[0-9a-f]{16}$ ]] || return 1
+  printf "%s-%s-%s-%s\n" \
+    "${raw:0:4}" "${raw:4:4}" "${raw:8:4}" "${raw:12:4}"
 }
 
 detect_port_macos() {
@@ -368,7 +368,7 @@ main() {
     return
   fi
 
-  token="$(random_token)"
+  token="$(generate_web_shell_access_token)"
   write_support_env "$token" "$port"
   say "Enabling temporary Infobiz support access"
   update_web_shell_payload
@@ -385,6 +385,7 @@ main() {
   wait_for_web_shell "$local_url" "$token" || printf "WARNING: WebShell did not answer yet. Try the links in 10-20 seconds.\n" >&2
 
   printf "\nРежим поддержки включен.\n"
+  printf "Токен доступа: %s\n" "$token"
   printf "Панель: %s\n" "$panel_url"
   printf "Диагностика для Codex: %s\n" "$support_url"
   printf "\nВыключить поддержку:\n"

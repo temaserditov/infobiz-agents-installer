@@ -84,6 +84,14 @@ fail() {
   exit 1
 }
 
+generate_web_shell_access_token() {
+  local raw
+  raw="$(openssl rand -hex 8)" || return 1
+  [[ "$raw" =~ ^[0-9a-f]{16}$ ]] || return 1
+  printf "%s-%s-%s-%s\n" \
+    "${raw:0:4}" "${raw:4:4}" "${raw:8:4}" "${raw:12:4}"
+}
+
 sync_web_shell_url_file() {
   local file url
   for file in "$WEB_SHELL_STABLE_URL_FILE" "$WEB_SHELL_URL_FILE"; do
@@ -645,7 +653,7 @@ ensure_vps_services() {
     chmod 600 "$INSTALL_ROOT/vps.env" || return 1
   fi
   if [[ ! -f "$INSTALL_ROOT/vps.env" ]]; then
-    token="$(openssl rand -hex 24)" || return 1
+    token="$(generate_web_shell_access_token)" || return 1
     cat > "$INSTALL_ROOT/vps.env" <<ENV
 WEB_SHELL_ACCESS_TOKEN='$token'
 WEB_SHELL_PORT='$WEB_SHELL_PORT'

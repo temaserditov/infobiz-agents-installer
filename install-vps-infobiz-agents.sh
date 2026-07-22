@@ -257,6 +257,40 @@ detect_public_host() {
   printf "%s" "$ip"
 }
 
+generate_web_shell_access_token() {
+  local raw
+  raw="$(openssl rand -hex 8)" || return 1
+  [[ "$raw" =~ ^[0-9a-f]{16}$ ]] || return 1
+  printf "%s-%s-%s-%s\n" \
+    "${raw:0:4}" "${raw:4:4}" "${raw:8:4}" "${raw:12:4}"
+}
+
+prepare_web_shell_access_token() {
+  local env_file="$INSTALL_ROOT/vps.env"
+  local line stored=""
+
+  if [[ -z "$WEB_SHELL_ACCESS_TOKEN" && -f "$env_file" ]]; then
+    while IFS= read -r line; do
+      case "$line" in
+        WEB_SHELL_ACCESS_TOKEN=*) stored="${line#WEB_SHELL_ACCESS_TOKEN=}" ;;
+      esac
+    done < "$env_file"
+
+    case "$stored" in
+      \'*\') stored="${stored:1:${#stored}-2}" ;;
+      \"*\") stored="${stored:1:${#stored}-2}" ;;
+    esac
+
+    if (( ${#stored} >= 8 && ${#stored} <= 255 )) \
+      && [[ "$stored" =~ ^[A-Za-z0-9._~-]+$ ]]; then
+      WEB_SHELL_ACCESS_TOKEN="$stored"
+    fi
+  fi
+
+  [[ -n "$WEB_SHELL_ACCESS_TOKEN" ]] \
+    || WEB_SHELL_ACCESS_TOKEN="$(generate_web_shell_access_token)"
+}
+
 write_web_shell_url() {
   local url="$1"
   printf "%s\n" "$url" > "$WEB_SHELL_URL_FILE"
@@ -985,7 +1019,7 @@ install_web_shell() {
 install_systemd_services() {
   local node_cmd="$HERMES_ROOT/node/bin/node"
   [[ -x "$node_cmd" ]] || node_cmd="$(command -v node)"
-  [[ -n "$WEB_SHELL_ACCESS_TOKEN" ]] || WEB_SHELL_ACCESS_TOKEN="$(openssl rand -hex 24)"
+  prepare_web_shell_access_token || return 1
   cat > "$INSTALL_ROOT/vps.env" <<ENV
 WEB_SHELL_ACCESS_TOKEN='$WEB_SHELL_ACCESS_TOKEN'
 WEB_SHELL_PORT='$WEB_SHELL_PORT'
@@ -1319,10 +1353,12 @@ main() {
   if [[ "$STUDENT_UI" == "1" ]]; then
     PROGRESS_STEP="$PROGRESS_TOTAL"
     render_progress "Готово"
-    printf "\nПанель агентов:\n%s\n" "$public_url"
+    printf "\nПанель агентов:\n%s\n\nТокен доступа:\n%s\n" \
+      "$public_url" "$WEB_SHELL_ACCESS_TOKEN"
   else
     say "Done"
-    printf "Панель агентов:\n%s\n\n" "$public_url"
+    printf "Панель агентов:\n%s\n\nТокен доступа:\n%s\n\n" \
+      "$public_url" "$WEB_SHELL_ACCESS_TOKEN"
     printf "Локальный API для агентов:\nhttp://127.0.0.1:%s\n\n" "$WEB_SHELL_PORT"
     printf "Лог установки:\n%s\n" "$LOG_FILE"
   fi

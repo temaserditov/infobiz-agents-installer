@@ -233,7 +233,10 @@ The VPS installer creates these agents:
 - `Технарь` (`tech`)
 
 WebShell is exposed as `http://SERVER_IP:8787/?token=...` and protected by a
-generated token. Agents use the internal local API
+generated 64-bit token in the short `abcd-1234-ef56-7890` format. Fresh
+installs print the token on its own line so it can be retyped from a VNC or
+serial console. Existing longer tokens remain valid and are not rotated by an
+update. Agents use the internal local API
 `http://127.0.0.1:8787`.
 
 The final WebShell URL is saved in both files:

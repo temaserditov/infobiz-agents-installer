@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INSTALLER="$ROOT/install-vps-infobiz-agents.sh"
 UPDATER="$ROOT/update-vps-infobiz-agents.sh"
+SUPPORT="$ROOT/support-infobiz-agents.sh"
 TEST_TMP="$(mktemp -d "${TMPDIR:-/tmp}/infobiz-vps-progress-test.XXXXXX")"
 
 cleanup() {
@@ -54,6 +55,17 @@ assert_output_matches() {
   local label="$3"
   printf '%s' "$output" | grep -Eq -- "$pattern" || fail_test "$label"
   pass_test "$label"
+}
+
+extract_bash_function() {
+  local file="$1"
+  local function_name="$2"
+  awk -v header="$function_name() {" '
+    $0 == header { printing = 1 }
+    printing { print }
+    printing && $0 == "}" { found = 1; exit }
+    END { if (!found) exit 1 }
+  ' "$file"
 }
 
 terminal_fixture() {
@@ -183,6 +195,7 @@ run_tmux_case() {
 
 bash -n "$INSTALLER"
 bash -n "$UPDATER"
+bash -n "$SUPPORT"
 bash -n "${BASH_SOURCE[0]}"
 
 assert_contains "$INSTALLER" 'if [[ "${INFOBIZ_INSTALLER_LIBRARY_ONLY:-0}" != "1" ]]; then' \
@@ -213,6 +226,61 @@ assert_contains "$INSTALLER" 'write_web_shell_url "$public_url"' \
   "installer writes the final WebShell URL through the shared helper"
 assert_contains "$UPDATER" 'sync_web_shell_url_file' \
   "updater backfills the stable WebShell URL file"
+assert_contains "$INSTALLER" 'prepare_web_shell_access_token || return 1' \
+  "fresh VPS installs use the short WebShell token generator"
+assert_contains "$UPDATER" 'token="$(generate_web_shell_access_token)"' \
+  "missing VPS env uses the short WebShell token generator"
+assert_contains "$SUPPORT" 'token="$(generate_web_shell_access_token)"' \
+  "temporary support access uses the short WebShell token generator"
+for token_source in "$INSTALLER" "$UPDATER" "$SUPPORT"; do
+  assert_contains "$token_source" 'raw="$(openssl rand -hex 8)"' \
+    "$(basename "$token_source") keeps 64 bits from OpenSSL CSPRNG"
+  assert_not_contains "$token_source" 'openssl rand -hex 24' \
+    "$(basename "$token_source") no longer generates 48-character WebShell tokens"
+done
+
+for token_source in "$INSTALLER" "$UPDATER" "$SUPPORT"; do
+  token_label="$(basename "$token_source")"
+  token_function="$TEST_TMP/$token_label.generator.sh"
+  token_fixture="$TEST_TMP/$token_label.tokens.txt"
+  extract_bash_function "$token_source" generate_web_shell_access_token \
+    > "$token_function" \
+    || fail_test "$token_label token generator could not be extracted"
+  bash -c '
+      set -euo pipefail
+      source "$1"
+      for _ in {1..128}; do
+        token="$(generate_web_shell_access_token)"
+        [[ "$token" =~ ^[0-9a-f]{4}(-[0-9a-f]{4}){3}$ ]]
+        printf "%s\n" "$token"
+      done
+    ' _ "$token_function" > "$token_fixture" \
+    || fail_test "$token_label short WebShell token generator failed"
+  [[ "$(wc -l < "$token_fixture" | tr -d ' ')" == "128" ]] \
+    || fail_test "$token_label token generator returned the wrong sample count"
+  [[ "$(sort -u "$token_fixture" | wc -l | tr -d ' ')" == "128" ]] \
+    || fail_test "$token_label token generator repeated a token"
+  pass_test "$token_label WebShell tokens keep 64 random bits in four manually typable groups"
+done
+
+legacy_token="0123456789abcdef0123456789abcdef0123456789abcdef"
+legacy_token_root="$TEST_TMP/legacy-web-shell-token"
+mkdir -p "$legacy_token_root/home" "$legacy_token_root/install" "$legacy_token_root/tmp"
+printf "WEB_SHELL_ACCESS_TOKEN='%s'\nWEB_SHELL_PORT='8787'\n" \
+  "$legacy_token" > "$legacy_token_root/install/vps.env"
+HOME="$legacy_token_root/home" \
+INSTALL_ROOT="$legacy_token_root/install" \
+TMPDIR="$legacy_token_root/tmp" \
+  bash -c '
+    set -euo pipefail
+    INFOBIZ_INSTALLER_LIBRARY_ONLY=1
+    source "$1"
+    trap - ERR EXIT
+    prepare_web_shell_access_token
+    [[ "$WEB_SHELL_ACCESS_TOKEN" == "$2" ]]
+  ' _ "$INSTALLER" "$legacy_token" \
+  || fail_test "forced reinstall rotated the existing WebShell token"
+pass_test "forced reinstall preserves an existing legacy WebShell token"
 
 url_file_root="$TEST_TMP/url-file"
 mkdir -p "$url_file_root/home" "$url_file_root/install" "$url_file_root/tmp"
