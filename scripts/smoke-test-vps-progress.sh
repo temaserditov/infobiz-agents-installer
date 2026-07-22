@@ -226,6 +226,45 @@ assert_output_contains "$progress_output" "Подготовка терминал
 assert_output_matches "$progress_output" '] [1-9][0-9]*%' \
   "first progress stage is greater than zero percent"
 
+partial_root="$TEST_TMP/partial-install"
+mkdir -p "$partial_root/home/.hermes/hermes-agent" \
+  "$partial_root/home/.hermes/profiles"/{marketer,copywriter,designer,tech} \
+  "$partial_root/install"
+if HOME="$partial_root/home" \
+  HERMES_ROOT="$partial_root/home/.hermes" \
+  INSTALL_ROOT="$partial_root/install" \
+  TMPDIR="$partial_root/tmp" \
+    bash -c '
+      set -euo pipefail
+      INFOBIZ_INSTALLER_LIBRARY_ONLY=1
+      source "$1"
+      trap - ERR EXIT
+      is_infobiz_managed_install
+    ' _ "$INSTALLER"
+then
+  fail_test "partial profile extraction must not be treated as a completed install"
+fi
+pass_test "partial profile extraction is not treated as a completed install"
+
+mkdir -p "$partial_root/install/web-shell"
+: > "$partial_root/install/web-shell/server.mjs"
+printf '%s\n' 'http://127.0.0.1:8787/?token=test' > "$partial_root/install/web-shell.url"
+printf '%s\n' "WEB_SHELL_PORT='8787'" > "$partial_root/install/vps.env"
+: > "$partial_root/install/.install-complete"
+HOME="$partial_root/home" \
+HERMES_ROOT="$partial_root/home/.hermes" \
+INSTALL_ROOT="$partial_root/install" \
+TMPDIR="$partial_root/tmp" \
+  bash -c '
+    set -euo pipefail
+    INFOBIZ_INSTALLER_LIBRARY_ONLY=1
+    source "$1"
+    trap - ERR EXIT
+    is_infobiz_managed_install
+  ' _ "$INSTALLER" \
+  || fail_test "completed install marker is not recognized"
+pass_test "completed install marker is recognized"
+
 mkdir -p "$TEST_TMP/session-a" "$TEST_TMP/session-b"
 session_a="$(profile_session_name \
   'https://example.test/profile.tar.gz?token=first' "$TEST_TMP/session-a")"

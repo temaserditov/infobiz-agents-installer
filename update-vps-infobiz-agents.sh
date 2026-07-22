@@ -784,6 +784,7 @@ if command -v systemctl >/dev/null 2>&1; then
 fi
 
 say "Patch complete"
+: > "$INSTALL_ROOT/.install-complete"
 if [[ "$STUDENT_UI" == "1" ]]; then
   printf "\nОбновление завершено.\n"
 fi

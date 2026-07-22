@@ -57,6 +57,7 @@ fi
 HERMES_AGENT_ROOT="$HERMES_ROOT/hermes-agent"
 WEB_SHELL_ROOT="$INSTALL_ROOT/web-shell"
 LOG_FILE="$INSTALL_ROOT/install.log"
+INSTALL_COMPLETE_MARKER="$INSTALL_ROOT/.install-complete"
 HERMES_CMD="$HERMES_AGENT_ROOT/venv/bin/hermes"
 UV_CMD=""
 TMP_ROOT="${TMPDIR:-/tmp}/infobiz-vps-install.$$"
@@ -1153,10 +1154,42 @@ is_infobiz_managed_install() {
   for profile in marketer copywriter designer tech; do
     [[ -d "$HERMES_ROOT/profiles/$profile" ]] && profile_count=$((profile_count + 1))
   done
-  if [[ -d "$INSTALL_ROOT/web-shell" && "$profile_count" -ge 1 ]]; then
+  [[ "$profile_count" -eq 4 ]] || return 1
+  [[ -f "$WEB_SHELL_ROOT/server.mjs" ]] || return 1
+  [[ -s "$INSTALL_ROOT/web-shell.url" ]] || return 1
+  [[ -s "$INSTALL_ROOT/vps.env" ]] || return 1
+
+  # New installs write this marker only after every service and the public URL
+  # are ready. The file checks above keep already-completed older installs
+  # upgradeable without mistaking an interrupted profile extraction for one.
+  if [[ -f "$INSTALL_COMPLETE_MARKER" ]]; then
     return 0
   fi
-  [[ "$profile_count" -ge 2 ]]
+
+  # Compatibility for installations completed before the marker existed.
+  local service
+  for service in \
+    infobiz-web-shell.service \
+    infobiz-hermes-gateway.service \
+    infobiz-hermes-gateway-marketer.service \
+    infobiz-hermes-gateway-copywriter.service \
+    infobiz-hermes-gateway-designer.service \
+    infobiz-hermes-gateway-tech.service
+  do
+    [[ -f "/etc/systemd/system/$service" ]] || return 1
+  done
+  return 0
+}
+
+has_infobiz_managed_footprint() {
+  [[ -f "$HERMES_AGENT_ROOT/.infobiz-upstream-ref" ]] && return 0
+  [[ "$(cat "$HERMES_AGENT_ROOT/.install_method" 2>/dev/null || true)" == "managed-runtime" ]] && return 0
+  [[ -d "$WEB_SHELL_ROOT" ]] && return 0
+  local profile
+  for profile in marketer copywriter designer tech; do
+    [[ -d "$HERMES_ROOT/profiles/$profile" ]] && return 0
+  done
+  return 1
 }
 
 main() {
@@ -1181,6 +1214,7 @@ main() {
       PROFILE_URL="$PROFILE_URL" WEB_SHELL_URL="$WEB_SHELL_URL" \
       INFOBIZ_INSTALL_LOCK_HELD=1 \
       bash "$update_script"
+    : > "$INSTALL_COMPLETE_MARKER"
     INSTALL_COMPLETED=1
     PROGRESS_STEP="$PROGRESS_TOTAL"
     render_progress "Готово"
@@ -1192,7 +1226,7 @@ main() {
 
   if [[ -d "$HERMES_ROOT" ]]; then
     local existing_was_infobiz=0
-    is_infobiz_managed_install && existing_was_infobiz=1
+    has_infobiz_managed_footprint && existing_was_infobiz=1
     local hermes_backup="$HOME/.hermes.backup.$(date +%Y%m%d%H%M%S)"
     mv "$HERMES_ROOT" "$hermes_backup"
     PREVIOUS_HERMES_BACKUP="$hermes_backup"
@@ -1249,6 +1283,7 @@ main() {
     rm -rf "$PREVIOUS_WEB_SHELL_BACKUP"
     PREVIOUS_WEB_SHELL_BACKUP=""
   fi
+  : > "$INSTALL_COMPLETE_MARKER"
   INSTALL_COMPLETED=1
 
   if [[ "$STUDENT_UI" == "1" ]]; then
