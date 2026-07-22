@@ -62,7 +62,7 @@ test -x "$HERMES" || HERMES="$HOME/.hermes/hermes-agent/venv/bin/hermes"
 ### Mac
 
 ```bash
-cat "$HOME/InfobizAgents/web-shell.url"
+cat "$HOME/InfobizAgents/webshell-url.txt" 2>/dev/null || cat "$HOME/InfobizAgents/web-shell.url"
 launchctl print "gui/$(id -u)/com.infobiz.agents.web-shell"
 tail -n 120 "$HOME/InfobizAgents/web-shell.err.log"
 launchctl kickstart -k "gui/$(id -u)/com.infobiz.agents.web-shell"
@@ -196,4 +196,3 @@ Python глобально. Если не работает и venv, исполь�
 
 Если два свежих токена отклонены одинаково, остановите повторы и передайте служебный
 идентификатор ошибки владельцу token gate. Сам секрет токена не публикуйте.
-

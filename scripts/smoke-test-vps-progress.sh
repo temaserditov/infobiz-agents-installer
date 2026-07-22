@@ -207,6 +207,30 @@ assert_contains "$INSTALLER" 'INFOBIZ_INSTALL_LOCK_HELD=1' \
   "nested safe updater reuses the parent install lock"
 assert_contains "$UPDATER" 'UPDATE_PROGRESS_START + UPDATE_PROGRESS_STEP * (UPDATE_PROGRESS_END - UPDATE_PROGRESS_START)' \
   "updater maps its stages into the caller progress range"
+assert_contains "$INSTALLER" 'WEB_SHELL_STABLE_URL_FILE="$INSTALL_ROOT/webshell-url.txt"' \
+  "installer defines the stable WebShell URL file"
+assert_contains "$INSTALLER" 'write_web_shell_url "$public_url"' \
+  "installer writes the final WebShell URL through the shared helper"
+assert_contains "$UPDATER" 'sync_web_shell_url_file' \
+  "updater backfills the stable WebShell URL file"
+
+url_file_root="$TEST_TMP/url-file"
+mkdir -p "$url_file_root/home" "$url_file_root/install" "$url_file_root/tmp"
+HOME="$url_file_root/home" \
+INSTALL_ROOT="$url_file_root/install" \
+TMPDIR="$url_file_root/tmp" \
+  bash -c '
+    set -euo pipefail
+    INFOBIZ_INSTALLER_LIBRARY_ONLY=1
+    source "$1"
+    trap - ERR EXIT
+    write_web_shell_url "http://203.0.113.10:8787/?token=test"
+    [[ "$(cat "$INSTALL_ROOT/web-shell.url")" == "http://203.0.113.10:8787/?token=test" ]]
+    [[ "$(cat "$INSTALL_ROOT/webshell-url.txt")" == "http://203.0.113.10:8787/?token=test" ]]
+    [[ "$(read_web_shell_url)" == "http://203.0.113.10:8787/?token=test" ]]
+  ' _ "$INSTALLER" \
+  || fail_test "stable WebShell URL file helper failed"
+pass_test "stable WebShell URL file helper writes both paths"
 
 progress_output="$({
   HOME="$TEST_TMP/progress-home" \

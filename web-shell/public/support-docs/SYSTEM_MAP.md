@@ -15,7 +15,7 @@
 |---|---|
 | Корень продукта | `~/InfobizAgents` |
 | Исходники WebShell | `~/InfobizAgents/web-shell` |
-| Ссылка на WebShell на Mac | `~/InfobizAgents/web-shell.url` |
+| Ссылка на WebShell | `~/InfobizAgents/webshell-url.txt`, `~/InfobizAgents/web-shell.url` |
 | Лог установки | `~/InfobizAgents/install.log` |
 | Лог обновления | `~/InfobizAgents/update.log` |
 | Логи WebShell | `~/InfobizAgents/web-shell.out.log`, `web-shell.err.log` |
@@ -130,7 +130,7 @@ HERMES_HOME="$HOME/.hermes/profiles/designer" "$HERMES" logs gateway -n 100
 На Mac откройте приложение `HERMES.app` либо адрес из:
 
 ```bash
-cat "$HOME/InfobizAgents/web-shell.url"
+cat "$HOME/InfobizAgents/webshell-url.txt" 2>/dev/null || cat "$HOME/InfobizAgents/web-shell.url"
 ```
 
 На VPS используйте публичную ссылку с токеном, которую выдал установщик. Сам

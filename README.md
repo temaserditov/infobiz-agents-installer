@@ -20,6 +20,14 @@ for the school site is built at:
 dist/infobiz-agents-codex-support.zip
 ```
 
+Windows VPS installs through Codex should use SSH into the VPS, not the old
+local PowerShell installer path. The student-facing runbook and ready prompt are
+in:
+
+```text
+docs/windows-codex-vps-install.md
+```
+
 Windows student command:
 
 ```powershell
@@ -227,6 +235,16 @@ The VPS installer creates these agents:
 WebShell is exposed as `http://SERVER_IP:8787/?token=...` and protected by a
 generated token. Agents use the internal local API
 `http://127.0.0.1:8787`.
+
+The final WebShell URL is saved in both files:
+
+```text
+~/InfobizAgents/webshell-url.txt
+~/InfobizAgents/web-shell.url
+```
+
+Codex should read one of these files over SSH and return the URL as a clickable
+chat link. Students do not need to copy the long URL from VNC or serial console.
 
 The default VPS installer UI is quiet: it shows a simple progress bar, pauses
 only for OpenAI device-code authorization, and prints the WebShell URL at the

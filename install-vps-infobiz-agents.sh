@@ -58,6 +58,8 @@ HERMES_AGENT_ROOT="$HERMES_ROOT/hermes-agent"
 WEB_SHELL_ROOT="$INSTALL_ROOT/web-shell"
 LOG_FILE="$INSTALL_ROOT/install.log"
 INSTALL_COMPLETE_MARKER="$INSTALL_ROOT/.install-complete"
+WEB_SHELL_URL_FILE="$INSTALL_ROOT/web-shell.url"
+WEB_SHELL_STABLE_URL_FILE="$INSTALL_ROOT/webshell-url.txt"
 HERMES_CMD="$HERMES_AGENT_ROOT/venv/bin/hermes"
 UV_CMD=""
 TMP_ROOT="${TMPDIR:-/tmp}/infobiz-vps-install.$$"
@@ -255,6 +257,24 @@ detect_public_host() {
   printf "%s" "$ip"
 }
 
+write_web_shell_url() {
+  local url="$1"
+  printf "%s\n" "$url" > "$WEB_SHELL_URL_FILE"
+  printf "%s\n" "$url" > "$WEB_SHELL_STABLE_URL_FILE"
+  chmod 600 "$WEB_SHELL_URL_FILE" "$WEB_SHELL_STABLE_URL_FILE" 2>/dev/null || true
+}
+
+read_web_shell_url() {
+  local file
+  for file in "$WEB_SHELL_STABLE_URL_FILE" "$WEB_SHELL_URL_FILE"; do
+    if [[ -s "$file" ]]; then
+      head -n 1 "$file"
+      return 0
+    fi
+  done
+  return 1
+}
+
 acquire_install_lock() {
   command -v flock >/dev/null 2>&1 \
     || fail "flock is unavailable; use Ubuntu 22.04/24.04 or Debian 11+"
@@ -354,8 +374,8 @@ ensure_tmux_session() {
   printf "\033[2J\033[H"
   if (( installer_exit_code == 0 )); then
     printf "Установка завершена.\n"
-    if [[ -f "$INSTALL_ROOT/web-shell.url" ]]; then
-      printf "\nПанель агентов:\n%s\n" "$(head -n 1 "$INSTALL_ROOT/web-shell.url")"
+    if web_shell_url="$(read_web_shell_url)"; then
+      printf "\nПанель агентов:\n%s\n" "$web_shell_url"
     fi
   else
     printf "Установка завершилась с ошибкой.\n"
@@ -1165,7 +1185,7 @@ is_infobiz_managed_install() {
   done
   [[ "$profile_count" -eq 4 ]] || return 1
   [[ -f "$WEB_SHELL_ROOT/server.mjs" ]] || return 1
-  [[ -s "$INSTALL_ROOT/web-shell.url" ]] || return 1
+  [[ -s "$WEB_SHELL_URL_FILE" || -s "$WEB_SHELL_STABLE_URL_FILE" ]] || return 1
   [[ -s "$INSTALL_ROOT/vps.env" ]] || return 1
 
   # New installs write this marker only after every service and the public URL
@@ -1227,8 +1247,9 @@ main() {
     INSTALL_COMPLETED=1
     PROGRESS_STEP="$PROGRESS_TOTAL"
     render_progress "Готово"
-    if [[ -f "$INSTALL_ROOT/web-shell.url" ]]; then
-      printf "\nПанель агентов:\n%s\n" "$(head -n 1 "$INSTALL_ROOT/web-shell.url")"
+    if web_shell_url="$(read_web_shell_url)"; then
+      write_web_shell_url "$web_shell_url"
+      printf "\nПанель агентов:\n%s\n" "$web_shell_url"
     fi
     return 0
   fi
@@ -1287,7 +1308,7 @@ main() {
     [[ -n "$public_host" ]] || fail "Could not detect the public VPS address; set PUBLIC_HOST explicitly"
     public_url="http://$public_host:$WEB_SHELL_PORT/?token=$WEB_SHELL_ACCESS_TOKEN"
   fi
-  printf "%s\n" "$public_url" > "$INSTALL_ROOT/web-shell.url"
+  write_web_shell_url "$public_url"
   if [[ -n "$PREVIOUS_WEB_SHELL_BACKUP" ]]; then
     rm -rf "$PREVIOUS_WEB_SHELL_BACKUP"
     PREVIOUS_WEB_SHELL_BACKUP=""

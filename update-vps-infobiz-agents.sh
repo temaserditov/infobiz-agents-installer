@@ -11,6 +11,8 @@ DESIGNER_ROOT="$HERMES_ROOT/profiles/designer"
 TECH_ROOT="$HERMES_ROOT/profiles/tech"
 WEB_SHELL_ROOT="$INSTALL_ROOT/web-shell"
 LOG_FILE="$INSTALL_ROOT/update.log"
+WEB_SHELL_URL_FILE="$INSTALL_ROOT/web-shell.url"
+WEB_SHELL_STABLE_URL_FILE="$INSTALL_ROOT/webshell-url.txt"
 VERSION="${VERSION:-0.1.0}"
 BASE_URL="${BASE_URL:-https://github.com/temaserditov/infobiz-agents-installer/releases/download/v$VERSION}"
 WEB_SHELL_URL="${WEB_SHELL_URL:-$BASE_URL/agent-web-shell-$VERSION.tar.gz}"
@@ -80,6 +82,20 @@ fail() {
   printf "\nERROR: %s\n" "$1" >&2
   printf "Log file: %s\n" "$LOG_FILE" >&2
   exit 1
+}
+
+sync_web_shell_url_file() {
+  local file url
+  for file in "$WEB_SHELL_STABLE_URL_FILE" "$WEB_SHELL_URL_FILE"; do
+    if [[ -s "$file" ]]; then
+      url="$(head -n 1 "$file")"
+      printf "%s\n" "$url" > "$WEB_SHELL_URL_FILE"
+      printf "%s\n" "$url" > "$WEB_SHELL_STABLE_URL_FILE"
+      chmod 600 "$WEB_SHELL_URL_FILE" "$WEB_SHELL_STABLE_URL_FILE" 2>/dev/null || true
+      return 0
+    fi
+  done
+  return 0
 }
 
 download_file() {
@@ -784,6 +800,7 @@ if command -v systemctl >/dev/null 2>&1; then
 fi
 
 say "Patch complete"
+sync_web_shell_url_file
 : > "$INSTALL_ROOT/.install-complete"
 if [[ "$STUDENT_UI" == "1" ]]; then
   printf "\nОбновление завершено.\n"
