@@ -267,6 +267,15 @@ ensure_tmux_session() {
   [[ "$STUDENT_UI" == "1" ]] || return 0
   [[ "$INFOBIZ_INSIDE_TMUX" != "1" ]] || return 0
 
+  # VNC/serial consoles already own a persistent server terminal. Putting the
+  # installer in tmux there can hide the OpenAI device code behind an alternate
+  # screen, leaving the visible console frozen on the outer 9% progress frame.
+  # SSH installs still use tmux so they survive a dropped network connection.
+  if [[ -z "${SSH_CONNECTION:-}" && -z "${SSH_TTY:-}" ]]; then
+    printf "Direct VPS console detected; continuing without tmux.\n" >> "$LOG_FILE"
+    return 0
+  fi
+
   if ! command -v tmux >/dev/null 2>&1; then
     command -v apt-get >/dev/null 2>&1 || fail "tmux is not installed and apt-get is unavailable"
     printf "Installing tmux for a resumable install session.\n" >> "$LOG_FILE"

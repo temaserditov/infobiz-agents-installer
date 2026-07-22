@@ -129,6 +129,7 @@ run_tmux_case() {
   MOCK_TERMINAL_PATH="$terminal_path" \
   MOCK_SESSION_EXISTS="$session_exists" \
   MOCK_COPY_TRACE="$case_root/copy.trace" \
+  SSH_CONNECTION="127.0.0.1 10000 127.0.0.1 22" \
     bash -c '
       set -euo pipefail
       export MOCK_INNER_EXIT_CODE MOCK_TMUX_CLIENT_EXIT_CODE MOCK_TERMINAL_PATH
@@ -225,6 +226,29 @@ assert_output_contains "$progress_output" "Подготовка терминал
   "first progress stage renders its label"
 assert_output_matches "$progress_output" '] [1-9][0-9]*%' \
   "first progress stage is greater than zero percent"
+
+direct_console_root="$TEST_TMP/direct-console"
+mkdir -p "$direct_console_root/home" "$direct_console_root/install" "$direct_console_root/tmp"
+direct_console_output="$({
+  HOME="$direct_console_root/home" \
+  INSTALL_ROOT="$direct_console_root/install" \
+  TMPDIR="$direct_console_root/tmp" \
+  SSH_CONNECTION="" \
+  SSH_TTY="" \
+    bash -c '
+      set -euo pipefail
+      INFOBIZ_INSTALLER_LIBRARY_ONLY=1
+      source "$1"
+      trap - ERR EXIT
+      ensure_tmux_session
+      printf "DIRECT_CONSOLE_OK\n"
+    ' _ "$INSTALLER"
+} 2>&1)"
+assert_output_contains "$direct_console_output" "DIRECT_CONSOLE_OK" \
+  "direct VPS console bypasses tmux"
+assert_contains "$direct_console_root/install/install.log" \
+  "Direct VPS console detected; continuing without tmux." \
+  "direct VPS console records why tmux was bypassed"
 
 partial_root="$TEST_TMP/partial-install"
 mkdir -p "$partial_root/home/.hermes/hermes-agent" \
